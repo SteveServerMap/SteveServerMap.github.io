@@ -1,0 +1,9 @@
+# 系统垃圾
+Thumbs.db
+desktop.ini
+.DS_Store
+node_modules/
+
+# 测试运行产物（截图/报告）
+tests/artifacts/*
+!tests/artifacts/.gitignore

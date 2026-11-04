@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://steveservermap.github.io/config.schema.json",
+  "title": "Steve Server Map 配置",
+  "description": "Minecraft 服务器离线地图配置：维度基底图 + 校准画幅 + 分组 + 路径点（世界坐标）。",
+  "type": "object",
+  "required": ["dimensions"],
+  "additionalProperties": true,
+  "properties": {
+    "version": { "type": "integer", "const": 1, "description": "配置格式版本，当前固定 1" },
+    "site": {
+      "type": "object",
+      "description": "站点文字信息",
+      "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string", "description": "顶栏标题" },
+        "subtitle": { "type": "string", "description": "顶栏副标题" },
+        "footer": { "type": "string", "description": "页脚文字" }
+      }
+    },
+    "defaultDimension": { "type": "string", "description": "默认打开的维度 id，缺省取第一个维度" },
+    "ui": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "labelMode": { "enum": ["always", "hover", "never"], "description": "路径点名称标签显示方式" },
+        "grid": { "type": "boolean", "description": "初始是否显示坐标网格" },
+        "startCollapsed": { "type": "boolean", "description": "初始是否收起左侧菜单" },
+        "showCoords": { "type": "boolean", "description": "是否显示鼠标处坐标读数" }
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "description": "维度列表。每个维度一张基底图片，路径点使用该维度自己的世界坐标。",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "image"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "description": "维度 id，用于 URL 与内部引用，如 overworld / nether / the_end" },
+          "name": { "type": "string", "description": "显示名称，如 主世界" },
+          "image": { "type": "string", "description": "基底图片路径（相对站点根目录）" },
+          "calibration": {
+            "type": "object",
+            "description": "画幅校准：把图片像素映射到世界坐标。画幅变化后只需改这里。",
+            "additionalProperties": true,
+            "properties": {
+              "calibrated": { "type": "boolean", "description": "是否已确认校准（false 时界面提示需校准）" },
+              "xMin": { "type": "number", "description": "图片左边缘对应的世界 X" },
+              "xMax": { "type": "number", "description": "图片右边缘对应的世界 X" },
+              "zMin": { "type": "number", "description": "图片上边缘对应的世界 Z" },
+              "zMax": { "type": "number", "description": "图片下边缘对应的世界 Z" },
+              "flipZ": { "type": "boolean", "description": "南北翻转：图片上方是 +Z 时置 true" },
+              "pixelsPerBlock": { "type": "number", "description": "替代写法：每方块像素数，配合 originX/originZ 使用" },
+              "originX": { "type": "number", "description": "替代写法：图片左上角对应的世界 X" },
+              "originZ": { "type": "number", "description": "替代写法：图片左上角对应的世界 Z" },
+              "note": { "type": "string", "description": "备注，仅用于说明" }
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "路径点分组",
+            "items": {
+              "type": "object",
+              "required": ["id", "name"],
+              "additionalProperties": true,
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "color": { "type": "string", "description": "分组色，如 #5ad26f" },
+                "visible": { "type": "boolean", "description": "初始是否可见，缺省 true" }
+              }
+            }
+          },
+          "waypoints": {
+            "type": "array",
+            "description": "路径点列表，坐标为世界坐标（方块）",
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "x", "z"],
+              "additionalProperties": true,
+              "properties": {
+                "id": { "type": "string", "description": "唯一 id" },
+                "name": { "type": "string", "description": "显示名称" },
+                "x": { "type": "number", "description": "世界 X 坐标" },
+                "y": { "type": ["number", "null"], "description": "世界 Y 坐标（可选，用于显示）" },
+                "z": { "type": "number", "description": "世界 Z 坐标" },
+                "group": { "type": "string", "description": "所属分组 id，缺省 default" },
+                "icon": { "type": "string", "description": "图标 key（见 docs/CONTRACT.md）或直接给 emoji" },
+                "color": { "type": "string", "description": "覆盖分组色" },
+                "label": { "enum": ["always", "hover", "never"], "description": "标签显示策略" },
+                "description": { "type": "string", "description": "详情描述" },
+                "url": { "type": "string", "description": "详情卡片里的外链" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1210">
+<title>Steve Server 地图</title>
+<meta name="description" content="Minecraft 服务器离线地图：多维度切换、配置文件驱动的路径点。">
+<link rel="stylesheet" href="assets/css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f1210'/%3E%3Cpath d='M16 5l10 6v10l-10 6-10-6V11z' fill='%235ad26f' opacity='.85'/%3E%3C/svg%3E">
+</head>
+<body data-sidebar="open" data-dimension="overworld">
+
+<!-- ============================== 应用外壳 ============================== -->
+<div id="app" class="app">
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <button id="sidebar-toggle" class="icon-btn topbar-btn" type="button"
+            aria-label="收起/展开路径点菜单" aria-controls="sidebar" aria-expanded="true">
+      <svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg>
+    </button>
+
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg class="icon" aria-hidden="true"><use href="#i-cube"></use></svg>
+      </span>
+      <div class="brand-text">
+        <h1 id="site-title" class="brand-title">Steve Server 地图</h1>
+        <p id="site-subtitle" class="brand-sub">离线地图 · 路径点可配置</p>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div id="dimension-switch" class="dimension-switch" role="tablist" aria-label="维度切换"></div>
+      <div class="topbar-sep" aria-hidden="true"></div>
+      <button id="btn-calibrate" class="btn ghost" type="button" title="校准地图画幅（画幅变化后重新校准，路径点即可对回）">
+        <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg><span>校准</span>
+      </button>
+      <button id="btn-copy-link" class="btn ghost" type="button" title="复制当前视角链接">
+        <svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>分享</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 主体 -->
+  <div class="body">
+
+    <!-- 左侧：路径点菜单 -->
+    <aside id="sidebar" class="sidebar" aria-label="路径点菜单">
+      <div class="sidebar-head">
+        <h2 class="sidebar-title">
+          <svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg>
+          路径点
+          <span id="waypoint-count" class="badge" title="当前维度路径点数量">0</span>
+        </h2>
+        <button id="btn-collapse" class="icon-btn" type="button" aria-label="收起侧栏" title="收起侧栏">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg>
+        </button>
+      </div>
+
+      <div class="search-row">
+        <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"></use></svg>
+        <input id="waypoint-search" class="search-input" type="search"
+               placeholder="搜索路径点 / 坐标…" autocomplete="off" spellcheck="false"
+               aria-label="搜索路径点">
+        <button id="search-clear" class="icon-btn tiny" type="button" aria-label="清空搜索" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+
+      <div id="calibration-notice" class="notice" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-warning"></use></svg>
+        <span class="notice-text">当前维度画幅尚未校准，路径点位置可能不准。</span>
+        <button id="notice-calibrate" class="link-btn" type="button">去校准</button>
+      </div>
+
+      <div id="sidebar-scroll" class="sidebar-scroll">
+        <section class="panel" id="panel-groups">
+          <div class="panel-head">
+            <h3 class="panel-title">分组</h3>
+            <div class="panel-actions">
+              <button id="btn-all-visible" class="link-btn" type="button" title="显示全部分组">全显</button>
+              <button id="btn-all-hidden" class="link-btn" type="button" title="隐藏全部分组">全隐</button>
+            </div>
+          </div>
+          <div id="group-list" class="group-list"></div>
+        </section>
+
+        <section class="panel" id="panel-waypoints">
+          <div class="panel-head">
+            <h3 class="panel-title">列表</h3>
+            <div class="panel-actions">
+              <button id="btn-sort" class="link-btn" type="button" title="按名称 / 坐标排序">排序</button>
+              <button id="btn-toggle-labels" class="link-btn" type="button" title="切换常显标签">标签</button>
+            </div>
+          </div>
+          <div id="waypoint-list" class="waypoint-list" role="list"></div>
+          <p id="waypoint-empty" class="empty" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg>
+            没有匹配的路径点
+          </p>
+          <div id="sidebar-error" class="sidebar-error" hidden></div>
+        </section>
+      </div>
+
+      <div class="sidebar-foot">
+        <div id="dimension-meta" class="dim-meta"></div>
+        <div class="foot-actions">
+          <button id="btn-fit" class="btn ghost small" type="button" title="缩放至整张地图">
+            <svg class="icon" aria-hidden="true"><use href="#i-fit"></use></svg><span>整图</span>
+          </button>
+          <button id="btn-grid" class="btn ghost small" type="button" title="显示坐标网格" aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-grid"></use></svg><span>网格</span>
+          </button>
+          <button id="btn-reset" class="btn ghost small" type="button" title="回到原点 (0,0)">
+            <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg><span>原点</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
+    <!-- 地图区 -->
+    <main class="map-area" aria-label="地图">
+      <div id="viewport" class="map-viewport" tabindex="0"
+           aria-label="地图视图，可拖拽平移、滚轮缩放">
+        <div id="stage" class="map-stage">
+          <img id="map-image" class="map-image" alt="地图基底图片" draggable="false" decoding="async">
+        </div>
+
+        <!-- 屏幕坐标系覆盖层：标记 / 网格 / 准星 / 弹窗 -->
+        <div id="overlay" class="map-overlay"></div>
+
+        <!-- 空状态 / 缺图 / 载入中 -->
+        <div id="map-state" class="map-state" hidden></div>
+
+        <div class="zoom-panel" role="group" aria-label="缩放">
+          <button id="zoom-in" class="zoom-btn" type="button" aria-label="放大" title="放大 (+)">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+          </button>
+          <div id="zoom-level" class="zoom-level" title="缩放级别">100%</div>
+          <button id="zoom-out" class="zoom-btn" type="button" aria-label="缩小" title="缩小 (-)">
+            <svg class="icon" aria-hidden="true"><use href="#i-minus"></use></svg>
+          </button>
+          <button id="zoom-fit" class="zoom-btn" type="button" aria-label="整图" title="缩放至整张地图">
+            <svg class="icon" aria-hidden="true"><use href="#i-fit"></use></svg>
+          </button>
+        </div>
+
+        <div id="coord-readout" class="coord-readout" hidden>X — Z —</div>
+        <div id="map-hint" class="map-hint">滚轮缩放 · 拖拽平移 · 点击路径点查看详情</div>
+        <div id="scale-bar" class="scale-bar" hidden><span class="scale-bar-line"></span><span id="scale-bar-label">100 方块</span></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 页脚 -->
+  <footer class="app-footer">
+    <span id="site-footer" class="footer-text">Minecraft 离线地图 · 路径点由 config.json 驱动</span>
+    <span class="footer-sep" aria-hidden="true">·</span>
+    <span id="footer-dim" class="footer-dim">主世界</span>
+    <span id="footer-status" class="footer-status" hidden></span>
+  </footer>
+</div>
+
+<!-- ============================== 校准向导 ============================== -->
+<div id="calibrator" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="cal-title">
+  <div class="modal-panel">
+    <header class="modal-head">
+      <h2 id="cal-title" class="modal-title">
+        <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg>
+        校准地图画幅
+      </h2>
+      <button id="cal-close" class="icon-btn" type="button" aria-label="关闭">
+        <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </header>
+
+    <div class="modal-body">
+      <p class="modal-help">
+        地图画幅变化（重新导出、裁剪、分辨率改变）后，用<b>两个已知地标</b>重新校准即可，
+        路径点存的是世界坐标，不会因此丢失。点击「开始拾取」，在地图上依次点 A、B 两点并填入它们的方块坐标。
+      </p>
+
+      <div class="cal-tabs" role="tablist">
+        <button class="cal-tab is-active" data-cal-tab="pick" type="button" role="tab">两点校准</button>
+        <button class="cal-tab" data-cal-tab="manual" type="button" role="tab">直接输入画幅</button>
+      </div>
+
+      <div class="cal-pane" data-cal-pane="pick">
+        <div class="cal-points">
+          <fieldset class="cal-point" data-point="a">
+            <legend>地标 A</legend>
+            <div class="cal-point-px" id="cal-a-px">尚未拾取</div>
+            <div class="cal-fields">
+              <label>X <input id="cal-a-x" type="number" step="any" inputmode="decimal"></label>
+              <label>Z <input id="cal-a-z" type="number" step="any" inputmode="decimal"></label>
+            </div>
+          </fieldset>
+          <fieldset class="cal-point" data-point="b">
+            <legend>地标 B</legend>
+            <div class="cal-point-px" id="cal-b-px">尚未拾取</div>
+            <div class="cal-fields">
+              <label>X <input id="cal-b-x" type="number" step="any" inputmode="decimal"></label>
+              <label>Z <input id="cal-b-z" type="number" step="any" inputmode="decimal"></label>
+            </div>
+          </fieldset>
+        </div>
+        <div class="cal-actions">
+          <button id="cal-pick-a" class="btn" type="button">拾取 A</button>
+          <button id="cal-pick-b" class="btn" type="button">拾取 B</button>
+          <button id="cal-pick-clear" class="btn ghost" type="button">清除</button>
+        </div>
+      </div>
+
+      <div class="cal-pane" data-cal-pane="manual" hidden>
+        <div class="cal-manual">
+          <label>左边缘世界 X <input id="cal-x-min" type="number" step="any" inputmode="decimal"></label>
+          <label>右边缘世界 X <input id="cal-x-max" type="number" step="any" inputmode="decimal"></label>
+          <label>上边缘世界 Z <input id="cal-z-min" type="number" step="any" inputmode="decimal"></label>
+          <label>下边缘世界 Z <input id="cal-z-max" type="number" step="any" inputmode="decimal"></label>
+        </div>
+        <label class="cal-check">
+          <input id="cal-flip-z" type="checkbox"> 南北翻转（图片上方是 +Z）
+        </label>
+      </div>
+
+      <div id="cal-status" class="cal-status"></div>
+
+      <div class="cal-result">
+        <div class="cal-result-head">
+          <span>解出的画幅</span>
+          <button id="cal-copy" class="link-btn" type="button">复制 JSON 片段</button>
+        </div>
+        <pre id="cal-json" class="cal-json">—</pre>
+      </div>
+    </div>
+
+    <footer class="modal-foot">
+      <button id="cal-reset" class="btn ghost" type="button">恢复默认</button>
+      <div class="modal-foot-right">
+        <button id="cal-cancel" class="btn ghost" type="button">取消</button>
+        <button id="cal-apply" class="btn primary" type="button" disabled>应用并刷新</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<!-- 提示条 -->
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<!-- ============================== 图标精灵 ============================== -->
+<svg id="icon-sprite" class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a4.5 4.5 0 006.4 0l2-2a4.5 4.5 0 10-6.4-6.4l-1 1"/><path d="M14 11a4.5 4.5 0 00-6.4 0l-2 2A4.5 4.5 0 1012 19.4l1-1"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M14.5 5l-7 7 7 7"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9.5 5l7 7-7 7"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M5 9.5l7 7 7-7"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.5 5.9A9.6 9.6 0 0112 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 01-3.3 4.1M6.2 7.8A17 17 0 002.5 12S6 18.5 12 18.5c1 0 1.9-.2 2.7-.5"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-6.3 7-11a7 7 0 10-14 0c0 4.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 11L12 3.5 20.5 11"/><path d="M6 9.5V20h12V9.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5A2.5 2.5 0 0012.5 4H6a2 2 0 00-2 2v6.5A2.5 2.5 0 006.5 15"/></symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3.5l9 16H3z"/><path d="M12 9v5M12 17h.01"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+    <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/></symbol>
+    <symbol id="i-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></symbol>
+  </defs>
+</svg>
+
+<script type="module" src="assets/js/app.js"></script>
+</body>
+</html>
