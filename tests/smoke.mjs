@@ -804,20 +804,30 @@ async function switchDimension(dimensionId) {
       async () => {
         observed = await page.evalFn(DIMENSION_STATE);
         const srcDecoded = observed.imageSrc ? decodeURIComponent(observed.imageSrc) : '';
+        // 必须「全部」满足：body 维度已切换、基底图 src 是这张图、图片已真正解码（naturalWidth>0）、
+        // 标记数已按新维度重建。原来用 || 只要 body[data-dimension] 一变就返回，
+        // 在真实网络（GitHub Pages）上图片还没下载完就断言 naturalWidth，会出现假失败。
         return (
-          observed.bodyDimension === dimension.id ||
-          srcDecoded.includes(expectedFile) ||
+          observed.bodyDimension === dimension.id &&
+          srcDecoded.includes(expectedFile) &&
+          observed.imageNaturalWidth > 0 &&
           observed.markerCount === expectedMarkers
         );
       },
-      { timeout: WAIT.normal, interval: 120, label: `切换到维度 ${dimension.id}` },
+      {
+        timeout: Math.max(WAIT.long, 25_000),
+        interval: 120,
+        label: `切换到维度 ${dimension.id}（含基底图下载与解码）`,
+      },
     );
   } catch (error) {
     throw new Error(
       `${error.message}；当前状态：${JSON.stringify({
         bodyDimension: observed?.bodyDimension,
         src: observed?.imageSrc,
+        naturalWidth: observed?.imageNaturalWidth,
         markers: observed?.markerCount,
+        expected: { dimension: dimension.id, image: expectedFile, markers: expectedMarkers },
       })}`,
     );
   }
