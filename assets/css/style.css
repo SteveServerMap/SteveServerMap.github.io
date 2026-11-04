@@ -3064,3 +3064,12 @@ body.is-cal-picking .map-viewport,
     transform: none !important;
   }
 }
+
+/* ===== Lead 修正：校准弹窗不要糊住地图 =====
+   校准需要在地图上认地标、对像素，backdrop 模糊会让底图看不清。
+   改成「只压暗、不模糊」，弹窗靠阴影与描边区分层级。 */
+#calibrator {
+  background: rgba(5, 8, 6, 0.55);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
