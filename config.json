@@ -1,5 +1,4 @@
 {
-  "$schema": "./config.schema.json",
   "version": 1,
   "site": {
     "title": "Steve Server 地图",
@@ -19,121 +18,149 @@
       "name": "主世界",
       "image": "主世界.png",
       "calibration": {
-        "calibrated": false,
-        "xMin": -1792,
-        "xMax": 1792,
-        "zMin": -2560,
-        "zMax": 2560,
+        "calibrated": true,
+        "xMin": -2048.5,
+        "xMax": 1535.5,
+        "zMin": -3584.375,
+        "zMax": 1535.625,
         "flipZ": false,
-        "note": "默认假设图片 1 像素 = 1 方块、且图片中心对应世界 (0,0)。请用左上角「校准」核对一次，确认后把 calibrated 改成 true。"
+        "note": "按世界原点 (0,0) · 每方块 1 像素 · 图片 3584×5120px · 由配置工具生成"
       },
       "groups": [
-        { "id": "base", "name": "据点", "color": "#5ad26f", "visible": true },
-        { "id": "resource", "name": "资源点", "color": "#59a6ff", "visible": true },
-        { "id": "build", "name": "建筑", "color": "#ffbc4b", "visible": true },
-        { "id": "event", "name": "活动", "color": "#ff7ab6", "visible": true }
+        {
+          "id": "base",
+          "name": "据点",
+          "color": "#5ad26f",
+          "visible": true
+        },
+        {
+          "id": "default",
+          "name": "未分组",
+          "color": "#ff7ab6",
+          "visible": true
+        }
       ],
       "waypoints": [
         {
-          "id": "spawn",
+          "id": "wp",
           "name": "出生点",
-          "x": 0,
-          "y": 65,
-          "z": 0,
-          "group": "base",
-          "icon": "spawn",
-          "label": "always",
-          "description": "服务器出生点 / 传送落点。示例路径点，请按实际坐标修改。"
-        },
-        {
-          "id": "spawn-town",
-          "name": "出生小镇",
-          "x": 64,
-          "y": 66,
-          "z": -32,
-          "group": "base",
-          "icon": "village",
-          "description": "出生点附近的基础设施区。"
-        },
-        {
-          "id": "iron-farm",
-          "name": "铁傀儡农场",
-          "x": -180,
-          "y": 72,
-          "z": 240,
-          "group": "resource",
-          "icon": "farm",
-          "description": "自动刷铁机。"
-        },
-        {
-          "id": "gold-farm",
-          "name": "金农场（下界）",
-          "x": 320,
-          "y": 68,
-          "z": -420,
-          "group": "resource",
-          "icon": "portal",
-          "description": "下界基岩层刷金，传送门在主世界这一侧。"
-        },
-        {
-          "id": "diamond-mine",
-          "name": "钻石矿洞",
-          "x": -512,
-          "y": -54,
-          "z": 640,
-          "group": "resource",
-          "icon": "diamond",
-          "description": "Y = -54 主矿区的入口。"
-        },
-        {
-          "id": "castle",
-          "name": "主城城堡",
-          "x": 420,
-          "y": 70,
-          "z": 180,
-          "group": "build",
-          "icon": "tower",
-          "description": "主城地标建筑，服务器合影常用点。"
-        },
-        {
-          "id": "harbor",
-          "name": "港口码头",
-          "x": -820,
+          "x": 6,
           "y": 63,
-          "z": -96,
-          "group": "build",
-          "icon": "ship",
-          "description": "沿河港口，存放船只与货物。"
+          "z": -11,
+          "group": "base",
+          "icon": "spawn"
         },
         {
-          "id": "shop",
-          "name": "玩家商店区",
-          "x": 96,
-          "y": 70,
-          "z": 320,
-          "group": "build",
-          "icon": "shop",
-          "description": "各玩家商店摊位集中区。"
+          "id": "wp-2",
+          "name": "四核刷铁机",
+          "x": -40,
+          "z": -120,
+          "group": "default",
+          "icon": "diamond"
         },
         {
-          "id": "arena",
-          "name": "竞技场",
-          "x": -300,
-          "y": 66,
-          "z": -640,
-          "group": "event",
-          "icon": "pvp",
-          "description": "PvP 比赛场地，活动时开放。"
+          "id": "wp-3",
+          "name": "16核刷铁机",
+          "x": 68,
+          "z": -154,
+          "group": "default",
+          "icon": "diamond"
         },
         {
-          "id": "note-mountain",
-          "name": "远山观景台",
-          "x": 1180,
-          "y": 128,
-          "z": -980,
-          "group": "event",
-          "icon": "mountain",
-          "description": "东侧山地高点，可俯瞰主城。"
+          "id": "wp-4",
+          "name": "沼泽刷怪塔",
+          "x": 166,
+          "z": 158,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-5",
+          "name": "心岛",
+          "x": 739,
+          "z": -108,
+          "group": "base",
+          "icon": "tower"
+        },
+        {
+          "id": "wp-6",
+          "name": "100倍熔炉组",
+          "x": -40,
+          "z": -139,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-7",
+          "name": "火药塔",
+          "x": 393,
+          "z": -268,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-8",
+          "name": "苔藓机",
+          "x": 856,
+          "z": -930,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-9",
+          "name": "刷石机",
+          "x": 927,
+          "z": -951,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-10",
+          "name": "村民交易所",
+          "x": 942,
+          "z": -916,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-11",
+          "name": "27倍熔炉组",
+          "x": 743,
+          "z": -185,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-12",
+          "name": "甘蔗机",
+          "x": 760,
+          "z": -185,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-13",
+          "name": "四核刷铁机",
+          "x": 728,
+          "z": -184,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-14",
+          "name": "村民交易所",
+          "x": 782,
+          "z": -143,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-15",
+          "name": "村民繁殖",
+          "x": 45,
+          "z": -106,
+          "group": "default",
+          "icon": "pin"
         }
       ]
     },
@@ -151,31 +178,14 @@
         "note": "下界坐标通常是主世界的 1/8。上传 下界.png 后重新校准。"
       },
       "groups": [
-        { "id": "base", "name": "据点", "color": "#5ad26f", "visible": true },
-        { "id": "portal", "name": "传送门", "color": "#b485ff", "visible": true }
-      ],
-      "waypoints": [
         {
-          "id": "nether-hub",
-          "name": "下界交通枢纽",
-          "x": 40,
-          "y": 70,
-          "z": -52,
-          "group": "portal",
-          "icon": "portal",
-          "description": "连接各基地的冰道枢纽。"
-        },
-        {
-          "id": "nether-fortress",
-          "name": "凋灵骷髅要塞",
-          "x": -300,
-          "y": 64,
-          "z": 420,
-          "group": "base",
-          "icon": "skull",
-          "description": "刷凋灵骷髅头的地点。"
+          "id": "default",
+          "name": "未分组",
+          "color": "#59a6ff",
+          "visible": true
         }
-      ]
+      ],
+      "waypoints": []
     },
     {
       "id": "the_end",
@@ -191,32 +201,14 @@
         "note": "上传 末地.png 后重新校准。"
       },
       "groups": [
-        { "id": "base", "name": "据点", "color": "#5ad26f", "visible": true },
-        { "id": "resource", "name": "资源点", "color": "#59a6ff", "visible": true }
-      ],
-      "waypoints": [
         {
-          "id": "end-main-island",
-          "name": "末地主岛",
-          "x": 0,
-          "y": 64,
-          "z": 0,
-          "group": "base",
-          "icon": "end",
-          "label": "always",
-          "description": "末地传送门出口，末影龙刷新区。"
-        },
-        {
-          "id": "end-farm",
-          "name": "末影人农场",
-          "x": 220,
-          "y": 64,
-          "z": -180,
-          "group": "resource",
-          "icon": "end",
-          "description": "末影珍珠自动农场。"
+          "id": "default",
+          "name": "未分组",
+          "color": "#59a6ff",
+          "visible": true
         }
-      ]
+      ],
+      "waypoints": []
     }
   ]
 }
