@@ -7,3 +7,9 @@ node_modules/
 # 测试运行产物（截图/报告）
 tests/artifacts/*
 !tests/artifacts/.gitignore
+
+# 配置工具写的备份（.backups/ 目录 + 旧版散落在根目录的 bak）
+.backups/
+config.json.bak-*
+*.bak-*
+
