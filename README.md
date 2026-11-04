@@ -17,6 +17,10 @@ Minecraft 服务器的**离线地图站点**：一张导出的地图 PNG + 一�
 
 ## 界面预览
 
+线上实况（<https://steveservermap.github.io/>，点路径点后的详情卡片）：
+
+![线上实况](docs/screenshots/live-github-pages.png)
+
 | 桌面端（主世界 + 路径点菜单） | 校准向导 |
 | --- | --- |
 | ![桌面端](docs/screenshots/desktop-main.png) | ![校准向导](docs/screenshots/desktop-calibrate.png) |

@@ -142,7 +142,8 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
-| 2026-11-05 01:50（Asia/Shanghai） | Node v24.18.0 / Windows x64 / Edge 155.0.4283.62 / 视口 1440×900 | **smoke 28 通过 / 0 失败 / 0 跳过 / 0 警告，22.3 s** |
+| 2026-11-05 02:05（Asia/Shanghai） | Node v24.18.0 / Windows x64 / Edge 155.0.4283.62 / 视口 1440×900 | **smoke 28 通过 / 0 失败 / 0 跳过 / 0 警告，22.4 s（本地服务）** |
+| 同一轮 | 线上 GitHub Pages `https://steveservermap.github.io/index.html` | **smoke 28 通过 / 0 失败，26.7 s**（`--url=` 外部服务模式） |
 | 同一轮 | — | **static-checks 30 通过 / 0 失败，19 ms** |
 | 同一轮 | — | **coords 单测 24 通过 / 0 失败（`node --test tests/coords.test.mjs`）** |
 
