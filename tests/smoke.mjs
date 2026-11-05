@@ -2156,6 +2156,109 @@ async function main() {
     return '面板点击/滚轮不穿透 · 撤销与清空生效 · 地图点击正常';
   });
 
+  await checkIfReady('markers.dense', '密集路径点：合成 ×N 徽标、标签互相避让、连点可轮换选中', async () => {
+    const STACK_ID = 'dense-smoke';
+    try {
+      const prepared = await page.evalFn((stackId) => {
+        const app = window.__mapApp;
+        const dim = app.state.dimension;
+        const near = { x: 40, z: 40 };
+        const list = [
+          { id: `${stackId}-a`, name: '密集 A', x: near.x, z: near.z, group: 'default', icon: 'pin' },
+          { id: `${stackId}-b`, name: '密集 B', x: near.x + 1, z: near.z, group: 'default', icon: 'pin' },
+          { id: `${stackId}-c`, name: '密集 C', x: near.x, z: near.z + 1, group: 'default', icon: 'pin' },
+          { id: `${stackId}-d`, name: '远处 D', x: near.x + 600, z: near.z + 600, group: 'default', icon: 'pin' },
+        ];
+        // 常显标签才能验证避让
+        app.markers.setLabelMode('always');
+        app.markers.setData(list, dim.groups, app.projection);
+        const image = app.projection.worldToImage(near.x, near.z);
+        app.view.centerOnImagePoint(image.px, image.py, { scale: 2, animate: false });
+        return { count: document.querySelectorAll('#overlay .marker').length };
+      }, STACK_ID);
+      if (prepared.count !== 4) throw new Error(`注入 4 个密集点失败：${JSON.stringify(prepared)}`);
+      await page.settle(420);
+
+      const layout = await page.evalFn((stackId) => {
+        const markers = [...document.querySelectorAll('#overlay .marker')];
+        return {
+          badges: markers
+            .filter((m) => m.querySelector('.marker-stack'))
+            .map((m) => ({ id: m.dataset.id, text: m.querySelector('.marker-stack').textContent, size: m.dataset.stackSize })),
+          stacked: markers.filter((m) => m.classList.contains('is-stacked')).length,
+          collided: markers.filter((m) => m.classList.contains('is-label-collided')).map((m) => m.dataset.id),
+          visibleLabels: markers
+            .filter((m) => {
+              const label = m.querySelector('.marker-label');
+              if (!label) return false;
+              const style = getComputedStyle(label);
+              return style.visibility !== 'hidden' && Number(style.opacity) > 0.5;
+            })
+            .map((m) => m.dataset.id),
+          stackTop: markers.find((m) => m.querySelector('.marker-stack'))?.dataset.id ?? null,
+          ids: markers.map((m) => m.dataset.id),
+          stackId,
+        };
+      }, STACK_ID);
+
+      if (layout.badges.length !== 1 || layout.badges[0].text !== '×3') {
+        throw new Error(`应有 1 个 ×3 徽标，实际 ${JSON.stringify(layout.badges)}`);
+      }
+      if (layout.stacked !== 1) throw new Error(`只有堆叠顶部应带 .is-stacked，实际 ${layout.stacked} 个`);
+      // 同堆只保留顶部标签：另外两个应被标记为 collided
+      const stackIds = layout.ids.filter((id) => id.startsWith(`${STACK_ID}-`) && id !== `${STACK_ID}-d`);
+      const expectedCollided = stackIds.filter((id) => id !== layout.stackTop);
+      for (const id of expectedCollided) {
+        if (!layout.collided.includes(id)) {
+          throw new Error(`${id} 的标签应与顶部标签冲突而被隐藏，实际 collided=${JSON.stringify(layout.collided)}`);
+        }
+      }
+      if (!layout.visibleLabels.includes(layout.stackTop)) {
+        throw new Error(`堆叠顶部的标签应保持可见，实际可见 ${JSON.stringify(layout.visibleLabels)}`);
+      }
+
+      // 连点堆叠标记 → 轮换选中
+      const cycle = await page.evalFn(async (topId) => {
+        const marker = document.querySelector(`#overlay .marker[data-id="${topId}"]`);
+        if (!marker) return null;
+        const ids = [];
+        for (let i = 0; i < 4; i += 1) {
+          marker.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          ids.push(window.__mapApp.markers.selectedId);
+        }
+        return { ids, stack: [...window.__mapApp.markers._stacks.values()][0] ?? null };
+      }, layout.stackTop);
+      if (!cycle) throw new Error('找不到堆叠顶部标记');
+      const unique = new Set(cycle.ids);
+      if (unique.size !== 3) {
+        throw new Error(`连点同一个标记应轮换到 3 个不同的点，实际选中序列 ${JSON.stringify(cycle.ids)}`);
+      }
+
+      // 选中后标签强制可见
+      const selectedLabel = await page.evalFn(() => {
+        const id = window.__mapApp.markers.selectedId;
+        const marker = document.querySelector(`#overlay .marker[data-id="${id}"]`);
+        const label = marker?.querySelector('.marker-label');
+        const style = label ? getComputedStyle(label) : null;
+        return { id, visible: style ? style.visibility !== 'hidden' && Number(style.opacity) > 0.5 : null };
+      });
+      if (selectedLabel.visible !== true) {
+        throw new Error(`被避让的点选中后标签应强制显示：${JSON.stringify(selectedLabel)}`);
+      }
+
+      return `×3 徽标 · 避让 ${expectedCollided.length} 个标签 · 连点轮换 ${unique.size} 个点`;
+    } finally {
+      // 无论成败都恢复真实数据
+      await page.evalFn(() => window.__mapApp.applyDimension('overworld')).catch(() => {});
+      await page.settle(400);
+      await page.evalFn(() => {
+        const mode = window.__mapApp.state?.config?.ui?.labelMode || 'hover';
+        window.__mapApp.markers.setLabelMode(mode);
+      }).catch(() => {});
+    }
+  });
+
   /* ---------------- 7. 窄屏 ---------------- */
   await checkIfReady(
     'narrow.layout',

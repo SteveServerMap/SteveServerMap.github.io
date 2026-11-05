@@ -2734,3 +2734,42 @@ body.is-measuring .map-overlay .marker-popup {
 body.is-measuring #viewport {
   cursor: crosshair;
 }
+
+/* ==========================================================================
+   密集路径点：堆叠徽标 + 标签避让
+   ========================================================================== */
+
+.marker-stack {
+  position: absolute;
+  right: -8px;
+  top: -6px;
+  display: none;
+  min-width: 17px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 210, 111, 0.75);
+  background: rgba(10, 16, 12, 0.95);
+  color: var(--accent, #5ad26f);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.marker.is-stacked .marker-stack {
+  display: block;
+}
+
+/* 被避让掉的标签：平时隐藏，悬停 / 选中时仍然显示（不然完全看不到名字） */
+.marker.is-label-collided:not(.is-selected):not(.is-hover):not(.is-highlighted) .marker-label {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.marker.is-stacked .marker-pin {
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(8, 11, 9, 0.4),
+    0 0 0 4.5px rgba(90, 210, 111, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}

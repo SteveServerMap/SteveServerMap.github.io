@@ -42,6 +42,14 @@ export const ICONS = Object.freeze({
 });
 
 const LABEL_MODES = ['always', 'hover', 'never'];
+
+/** 屏幕距离 ≤ 这个值视为「堆在一起」：合成一个 ×N 徽标，点击可在同堆点之间轮换 */
+const STACK_RADIUS_PX = 12;
+/** 标签避让时两个标签之间至少留的间距 */
+const LABEL_PAD_PX = 2;
+/** 标记元素几何（与 style.css 的 .marker 一致：盒子 30×35，锚点在底边中点） */
+const MARKER_W = 30;
+const MARKER_H = 35;
 const DEFAULT_COLOR = '#5ad26f';
 const POPUP_GAP = 14;
 const POPUP_MARGIN = 8;
@@ -108,6 +116,10 @@ export class MarkerLayer {
     this._byId = new Map();
     this._els = new Map();
     this._pos = new Map();
+    /** 标签尺寸缓存：id → {w, h}（避免每帧读 offsetWidth 造成 layout thrash） */
+    this._labelSize = new Map();
+    /** 堆叠分组：id → [同堆 id...]（按 id 排序，点击时轮换） */
+    this._stacks = new Map();
     this._groupVisible = new Map();
     this._visibleIds = new Set();
     this._filter = null;
@@ -164,6 +176,8 @@ export class MarkerLayer {
     this._hoverId = null;
     this._closePopup();
 
+    this._labelSize.clear();
+    this._stacks = new Map();
     this._byId = new Map(this.waypoints.map((wp) => [String(wp.id), wp]));
     this._groupVisible = new Map(this.groups.map((group) => [String(group.id), group.visible !== false]));
 
@@ -240,6 +254,7 @@ export class MarkerLayer {
    */
   setLabelMode(mode) {
     this.labelMode = LABEL_MODES.includes(mode) ? mode : 'hover';
+    this._labelSize.clear();
     if (this.overlayEl) this.overlayEl.dataset.labelMode = this.labelMode;
     for (const wp of this.waypoints) {
       const marker = this._els.get(String(wp.id));
@@ -318,6 +333,9 @@ export class MarkerLayer {
         marker.classList.toggle('is-offscreen', offscreen);
       }
     }
+
+    // 密集点去重叠：z 序 / 堆叠徽标 / 标签避让
+    this._layoutDenseMarkers(vw, vh);
 
     if (this._popup && !this._popup.hidden) this._placePopup();
   }
@@ -406,6 +424,160 @@ export class MarkerLayer {
     return marker;
   }
 
+
+  /* ------------------------------------------------------------------ *
+   * 密集点去重叠
+   * ------------------------------------------------------------------ */
+
+  /**
+   * 屏幕上的路径点很密时，处理三件事：
+   *   1. z 序：越靠下的标记盖住上面的（伪等距感），选中/悬停永远在最上层；
+   *   2. 堆叠：屏幕距离 ≤ STACK_RADIUS_PX 的点视为一堆，最上面那个显示 ×N 徽标，
+   *      连点同一个标记会在同堆点之间轮换选中（否则下面的点永远点不到）；
+   *   3. 标签避让：只保留不互相遮挡的标签（选中/悬停的优先），其余加 .is-label-collided 隐藏。
+   */
+  _layoutDenseMarkers(viewWidth, viewHeight) {
+    const items = [];
+    for (const wp of this.waypoints) {
+      const id = String(wp.id);
+      const marker = this._els.get(id);
+      if (!marker || marker.hidden) continue;
+      if (marker.classList.contains('is-offscreen')) continue;
+      const pos = this._pos.get(id);
+      if (!pos) continue;
+      items.push({ id, wp, marker, x: pos.x, y: pos.y });
+    }
+
+    /* ---------- 1) z 序 ---------- */
+    const zOrder = [...items].sort((a, b) => a.y - b.y || a.id.localeCompare(b.id));
+    zOrder.forEach((item, index) => {
+      let z = 10 + index;
+      if (this.highlightId != null && String(this.highlightId) === item.id) z += 1000;
+      if (this.selectedId != null && String(this.selectedId) === item.id) z += 2000;
+      const text = String(z);
+      if (item.marker.style.zIndex !== text) item.marker.style.zIndex = text;
+    });
+
+    /* ---------- 2) 堆叠 ---------- */
+    this._stacks = new Map();
+    const used = new Set();
+    const stacks = [];
+    for (const item of items) {
+      if (used.has(item.id)) continue;
+      const group = [item];
+      used.add(item.id);
+      for (const other of items) {
+        if (used.has(other.id)) continue;
+        if (Math.hypot(other.x - item.x, other.y - item.y) <= STACK_RADIUS_PX) {
+          group.push(other);
+          used.add(other.id);
+        }
+      }
+      if (group.length > 1) stacks.push(group);
+    }
+
+    for (const item of items) item.marker.classList.remove('is-stacked');
+    /** 堆叠分组 → 顶上的那个 id（标签避让时只留它的标签） */
+    const stackTop = new Map();
+    for (const group of stacks) {
+      const members = group.map((entry) => entry.id).sort((a, b) => a.localeCompare(b));
+      for (const id of members) this._stacks.set(id, members);
+      // 徽标挂在「盖在最上面」的那个（y 最大）
+      const top = group.reduce((acc, entry) => (entry.y >= acc.y ? entry : acc), group[0]);
+      for (const id of members) stackTop.set(id, top.id);
+      for (const entry of group) {
+        entry.marker.classList.toggle('is-stacked', entry === top);
+        entry.marker.dataset.stackSize = String(members.length);
+      }
+      let badge = top.marker.querySelector('.marker-stack');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'marker-stack';
+        badge.setAttribute('aria-hidden', 'true');
+        top.marker.appendChild(badge);
+      }
+      const text = `×${members.length}`;
+      if (badge.textContent !== text) badge.textContent = text;
+    }
+    // 不在堆里的标记：清掉徽标与残留数据
+    for (const item of items) {
+      if (this._stacks.has(item.id)) continue;
+      const badge = item.marker.querySelector('.marker-stack');
+      if (badge) badge.remove();
+      if (item.marker.dataset.stackSize) delete item.marker.dataset.stackSize;
+    }
+
+    /* ---------- 3) 标签避让 ---------- */
+    const labelCandidates = [];
+    for (const item of items) {
+      const label = item.marker.querySelector('.marker-label');
+      if (!label) continue;
+      const mode = label.parentElement?.dataset.label || this.labelMode;
+      const forceVisible =
+        (this.selectedId != null && String(this.selectedId) === item.id) ||
+        (this.highlightId != null && String(this.highlightId) === item.id);
+      // 只有「常显」或「选中/悬停」的标签才需要参与避让（hover 标签平时不可见，不会挡人）
+      if (!forceVisible && mode !== 'always') {
+        item.marker.classList.remove('is-label-collided');
+        continue;
+      }
+      let size = this._labelSize.get(item.id);
+      if (!size) {
+        // offsetWidth 在 visibility:hidden 时依然可测，所以这里能拿到真实尺寸
+        size = { w: label.offsetWidth || 0, h: label.offsetHeight || 0 };
+        if (size.w > 0 && size.h > 0) this._labelSize.set(item.id, size);
+      }
+      if (!size || !(size.w > 0)) continue;
+      // 标签在标记盒子正上方：x 居中，底边贴着盒子顶边
+      const rect = {
+        left: item.x - size.w / 2,
+        right: item.x + size.w / 2,
+        top: item.y - MARKER_H - size.h,
+        bottom: item.y - MARKER_H,
+      };
+      const priority = forceVisible ? 2 : 1;
+      labelCandidates.push({ item, rect, priority });
+    }
+
+    // 选中/悬停的先放，然后按 y 从小到大（靠上的先占位，跟随视觉层级）
+    labelCandidates.sort((a, b) => b.priority - a.priority || a.item.y - b.item.y || a.item.id.localeCompare(b.item.id));
+
+    const placedLabels = [];
+    const pinRects = items.map((item) => ({
+      id: item.id,
+      left: item.x - MARKER_W / 2,
+      right: item.x + MARKER_W / 2,
+      top: item.y - MARKER_H,
+      bottom: item.y,
+    }));
+
+    const overlaps = (a, b) =>
+      a.left < b.right + LABEL_PAD_PX &&
+      a.right + LABEL_PAD_PX > b.left &&
+      a.top < b.bottom + LABEL_PAD_PX &&
+      a.bottom + LABEL_PAD_PX > b.top;
+
+    for (const candidate of labelCandidates) {
+      const { item, rect } = candidate;
+      const stack = this._stacks.get(item.id);
+      const topId = stackTop.get(item.id) || item.id;
+      // 一堆叠在一起的点：只保留「顶」那个的标签，其余一律让位（否则满屏重叠）
+      if (stack && topId !== item.id) {
+        item.marker.classList.add('is-label-collided');
+        continue;
+      }
+      // 同一个堆里的图标不算冲突（它们本来就在标签底下）
+      const sameStack = stack ? new Set(stack) : null;
+      const hitLabel = placedLabels.some((other) => overlaps(rect, other));
+      const hitPin = pinRects.some(
+        (pin) => pin.id !== item.id && !(sameStack && sameStack.has(pin.id)) && overlaps(rect, pin),
+      );
+      const collided = hitLabel || hitPin;
+      item.marker.classList.toggle('is-label-collided', collided);
+      if (!collided) placedLabels.push(rect);
+    }
+  }
+
   _applyLabelMode(marker, waypoint) {
     const mode = LABEL_MODES.includes(waypoint.label) ? waypoint.label : this.labelMode;
     marker.dataset.label = mode;
@@ -485,7 +657,20 @@ export class MarkerLayer {
     if (markerEl && this.overlayEl.contains(markerEl)) {
       event.preventDefault();
       event.stopPropagation();
-      const waypoint = this._byId.get(markerEl.dataset.id);
+      const clickedId = String(markerEl.dataset.id);
+      const stack = this._stacks.get(clickedId);
+      // 多个路径点叠在同一处时，连点同一个标记 = 在同堆点之间轮换选中
+      if (stack && stack.length > 1) {
+        const current = this.selectedId != null ? stack.indexOf(String(this.selectedId)) : -1;
+        const nextId = current >= 0 ? stack[(current + 1) % stack.length] : clickedId;
+        const nextWaypoint = this._byId.get(nextId) || this._byId.get(clickedId);
+        if (nextWaypoint) {
+          this.setSelected(nextWaypoint.id);
+          this._emit('onSelect', nextWaypoint);
+          return;
+        }
+      }
+      const waypoint = this._byId.get(clickedId);
       if (!waypoint) return;
       this.setSelected(waypoint.id);
       this._emit('onSelect', waypoint);

@@ -171,6 +171,20 @@ DOM：每个路径点生成
 
 ---
 
+### 4.x 密集点去重叠（v2，2026-11-05）
+
+`markers.js` 的 `update()` 末尾会跑一次 `_layoutDenseMarkers()`，处理"点太密互相遮挡"：
+
+1. **z 序**：按屏幕 y 从小到大赋值 `marker.style.zIndex`（越靠下越盖在上面），`is-highlighted` +1000、`is-selected` +2000；
+2. **堆叠**：屏幕距离 ≤ `STACK_RADIUS_PX = 12` 的标记归为一堆（`this._stacks: Map<id, ids[]>`）；
+   堆里**最上面**那个加 `.is-stacked` 并渲染 `<span class="marker-stack">×N</span>` 徽标；
+   连点同一个标记会在同堆点之间**轮换选中**（否则被盖住的点永远点不到）；
+3. **标签避让**：只对「常显 / 选中 / 悬停」的标签参与判定；同堆只保留堆顶那个标签，
+   其余按矩形相交（彼此 + 别人的 pin 矩形，`LABEL_PAD_PX = 2`）加 `.is-label-collided` 隐藏；
+   悬停 / 选中时 CSS 仍会强制显示（`:not(.is-selected):not(.is-hover)` 选择器）。
+- 标签尺寸缓存在 `this._labelSize`（`setData` / `setLabelMode` 时清空），避免每帧读 `offsetWidth`。
+- 几何常量 `MARKER_W = 30` / `MARKER_H = 35` 必须与 `style.css` 的 `.marker` 保持一致。
+
 ## 5. `assets/js/sidebar.js`（ui-dev）—— 左侧菜单
 
 ```js
