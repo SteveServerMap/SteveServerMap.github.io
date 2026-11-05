@@ -175,6 +175,9 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 | `grid` | boolean | `false` | 初始是否显示坐标网格；页面内可按 `G` 切换 |
 | `startCollapsed` | boolean | `false` | 初始是否收起左侧菜单（窄屏默认收起） |
 | `showCoords` | boolean | `true` | 是否在地图左下角显示鼠标处的坐标读数 |
+| `defaultSpanBlocks` | number | `1024` | 进入页面 / 点「原点」时视野横向覆盖多少方块（64~16384）。越小越贴近地形，越大越接近全图 |
+
+> 打开页面默认会**聚焦世界原点 (0,0)**，横向约 1024 方块（约 1 屏幕像素 = 1 方块）；左下角「原点」按钮行为完全一致，点「整图」才回到全图适配。
 
 ### 4.2 维度（`dimensions` 数组元素）
 

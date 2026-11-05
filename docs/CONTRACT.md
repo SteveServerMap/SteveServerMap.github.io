@@ -211,6 +211,15 @@ sidebar.js 负责绑定它们。
 - 搜索（`#waypoint-search`）时强制展开所有分组，避免「搜到了却看不见」；清空搜索后恢复用户之前的折叠状态。
 - 分组顺序跟随 `config.json` 里 `dimensions[].groups` 的定义顺序，组内顺序跟随 `waypoints` 数组顺序。
 
+### 5.y 默认视野（进入页面 / 「原点」按钮）
+
+- 进入某个维度（且没有 `#dim/...` 深链）时，默认**聚焦世界原点 (0,0)**，视野横向约 `ui.defaultSpanBlocks`（默认 **1024**）个方块，
+  不再使用「整图适配」（那是最小缩放，1 方块只占约 0.13 屏幕像素）。
+- 左下角 **「原点」(#btn-reset)** 与进入页面时**完全同一行为**：回到原点 + 恢复默认视野比例。
+- **「整图」(#btn-fit / #zoom-fit)** 仍是整图适配；`#btn-reset` 不再复用 `MapView.resetView()`。
+- URL 深链 `#dim=<id>&x=<世界X>&z=<世界Z>&s=<缩放>` 优先于默认视野；`#dim=<id>&wp=<路径点id>` 会聚焦该路径点。
+- 想调整"初始看多大一片"：在 `config.json` 里设 `ui.defaultSpanBlocks`（64~16384）。
+
 ## 6. `assets/js/calibrate.js`（style-dev）—— 校准向导
 
 ```js

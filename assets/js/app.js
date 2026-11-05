@@ -182,7 +182,10 @@ function initViewer() {
   bindClick('zoom-out', () => tryCall(view, 'zoomBy', 1 / 1.35));
   bindClick('zoom-fit', () => fitToContent());
   bindClick('btn-fit', () => fitToContent());
-  bindClick('btn-reset', () => gotoWorld(0, 0, { animate: true }));
+  // 左下角「原点」：回到世界原点 + 恢复默认视野比例（与进入页面时一致）
+  bindClick('btn-reset', () => {
+    if (!focusOrigin({ animate: true })) gotoWorld(0, 0, { animate: true });
+  });
   bindClick('btn-grid', toggleGrid);
 
   // 首次交互后淡出操作提示
@@ -282,7 +285,8 @@ function handleAction(name) {
       fitToContent();
       break;
     case 'reset':
-      gotoWorld(0, 0, { animate: true });
+      // 左下角「原点」：回到世界原点，并恢复到默认视野比例（而不是保持当前缩放）
+      if (!focusOrigin({ animate: true })) gotoWorld(0, 0, { animate: true });
       break;
     case 'grid':
       toggleGrid();
@@ -390,7 +394,10 @@ async function applyDimension(dimensionId, opts = {}) {
   // 视角：优先用 URL 深链，否则整图适配
   const hash = opts.hash || readHash();
   const applied = hash && hash.dim === dim.id ? applyHashView(hash) : false;
-  if (!applied) fitToContent({ animate: false });
+  if (!applied) {
+    // 默认聚焦世界原点（而不是整图适配 = 最小缩放）
+    if (!focusOrigin({ animate: false })) fitToContent({ animate: false });
+  }
 
   pushDataToSidebar();
   refreshMarkers();
@@ -540,6 +547,45 @@ function fitToContent(opts = {}) {
   if (!state.imageSize) return;
   tryCall(view, 'fitToContent', { padding: 24, animate: opts.animate !== false });
   drawGrid(safeViewState());
+}
+
+/**
+ * 进入页面 / 点「原点」时的默认视野：以世界原点 (0,0) 为中心，横向约显示 DEFAULT_SPAN_BLOCKS 个方块。
+ *
+ * 为什么不直接整图适配：整图适配是「最小缩放」，1 像素只占 0.1~0.2 个屏幕像素，
+ * 进来只看到一整片模糊的地图缩略图，既看不清地形也找不到自己在哪。
+ * 换成「约 1024 方块视野」后大约 1 屏幕像素 = 1 方块（Minecraft 地图的原生比例），
+ * 出生点周边地形和附近的路径点都能一眼看到。想总览全图仍可点「整图」。
+ */
+const DEFAULT_SPAN_BLOCKS = 1024;
+const MIN_SPAN_BLOCKS = 64;
+const MAX_SPAN_BLOCKS = 16384;
+
+/** 当前配置希望的默认视野宽度（方块），可在 config.json 的 ui.defaultSpanBlocks 里改 */
+function defaultSpanBlocks() {
+  const raw = Number(state.config?.ui?.defaultSpanBlocks);
+  if (!Number.isFinite(raw)) return DEFAULT_SPAN_BLOCKS;
+  return Math.min(MAX_SPAN_BLOCKS, Math.max(MIN_SPAN_BLOCKS, raw));
+}
+
+/** 把视野聚焦到世界原点（等价于「回到原点」，但会主动设置一个合适的缩放） */
+function focusOrigin(opts = {}) {
+  if (!state.projection || !state.imageSize) return false;
+  const pt = state.projection.worldToImage(0, 0);
+  if (!pt || !Number.isFinite(pt.px)) return false;
+
+  // 每像素多少方块 → 想让视口宽度覆盖 span 个方块，需要的缩放比
+  const blocksPerPixelX = (state.calibration ? state.calibration.xMax - state.calibration.xMin : state.imageSize.width) / state.imageSize.width;
+  const viewState = safeViewState();
+  const viewWidth = Number(viewState?.viewWidth) || 0;
+  const span = defaultSpanBlocks();
+  let scale = null;
+  if (viewWidth > 0 && blocksPerPixelX > 0) {
+    scale = (viewWidth * blocksPerPixelX) / span;
+  }
+  tryCall(view, 'centerOnImagePoint', pt.px, pt.py, { scale, animate: opts.animate !== false });
+  drawGrid(safeViewState());
+  return true;
 }
 
 function gotoWorld(x, z, opts = {}) {

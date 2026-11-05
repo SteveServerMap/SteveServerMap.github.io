@@ -26,7 +26,13 @@
         "labelMode": { "enum": ["always", "hover", "never"], "description": "路径点名称标签显示方式" },
         "grid": { "type": "boolean", "description": "初始是否显示坐标网格" },
         "startCollapsed": { "type": "boolean", "description": "初始是否收起左侧菜单" },
-        "showCoords": { "type": "boolean", "description": "是否显示鼠标处坐标读数" }
+        "showCoords": { "type": "boolean", "description": "是否显示鼠标处坐标读数" },
+        "defaultSpanBlocks": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 16384,
+          "description": "进入页面 / 点「原点」时视野横向覆盖多少方块（默认 1024）。越小越贴近地形，越大越接近全图。"
+        }
       }
     },
     "dimensions": {
