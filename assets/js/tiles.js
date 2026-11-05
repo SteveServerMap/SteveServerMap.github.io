@@ -26,7 +26,9 @@
  *     也避免层级切换后留下旧栅格内容；
  *   - 放大（1 瓦片像素 > 1 屏幕像素）时关掉 imageSmoothingEnabled，保持像素锐利；
  *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），一律静默跳过；
- *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求。
+ *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求；
+ *   - 瓦片 URL 带 ?v=<manifest.generatedAt> 版本参数：瓦片重新生成后 URL 变化，
+ *     自动绕开浏览器 HTTP 缓存（GitHub Pages 静态资源默认 max-age=600）。
  */
 
 /** 已解码瓦片的内存上限（张）。256×256 RGBA 约 256 KB/张，400 张 ≈ 100 MB。 */
@@ -95,13 +97,15 @@ export class Tileset {
    * @param {string} [params.manifestUrl]
    * @param {string} [params.source]
    */
-  constructor({ tileSize, levels, bounds, baseUrl, manifestUrl = '', source = '' }) {
+  constructor({ tileSize, levels, bounds, baseUrl, manifestUrl = '', source = '', version = '' }) {
     this.tileSize = tileSize;
     this.levels = levels;
     this.bounds = bounds;
     this.baseUrl = baseUrl;
     this.manifestUrl = manifestUrl;
     this.source = source;
+    /** manifest.generatedAt 净化后的版本串：随瓦片重新生成而变化，用于绕开 HTTP 缓存 */
+    this.version = version;
     /** 图片像素尺寸 = 世界跨度（level 0 的 1 像素 = 1 方块） */
     this.imageWidth = bounds.xMax - bounds.xMin;
     this.imageHeight = bounds.zMax - bounds.zMin;
@@ -151,9 +155,14 @@ export class Tileset {
     return best;
   }
 
-  /** 某层某瓦片的 URL：<base>/<level>/<x>_<y>.png */
+  /**
+   * 某层某瓦片的 URL：<base>/<level>/<x>_<y>.png。
+   * 带 ?v=<generatedAt> 版本参数：瓦片重新生成后 URL 变化，强制绕过浏览器 HTTP 缓存
+   * （GitHub Pages 对静态资源默认 max-age=600，同 URL 会命中旧图）。
+   */
   urlFor(level, x, y) {
-    return `${this.baseUrl}${level}/${x}_${y}.png`;
+    const v = this.version ? `?v=${encodeURIComponent(this.version)}` : '';
+    return `${this.baseUrl}${level}/${x}_${y}.png${v}`;
   }
 
   /** 供 UI 显示 / 调试用的摘要（纯 JSON） */
@@ -163,6 +172,7 @@ export class Tileset {
       baseUrl: this.baseUrl,
       manifestUrl: this.manifestUrl,
       source: this.source,
+      version: this.version,
       imageWidth: this.imageWidth,
       imageHeight: this.imageHeight,
       bounds: { ...this.bounds },
@@ -254,6 +264,7 @@ export function parseManifest(raw, { manifestUrl = DEFAULT_MANIFEST } = {}) {
     baseUrl: tileBaseFromManifest(manifestUrl),
     manifestUrl,
     source: typeof raw.source === 'string' ? raw.source : '',
+    version: String(raw.generatedAt ?? '').replace(/[^A-Za-z0-9._-]/g, ''),
   });
 }
 
@@ -576,7 +587,10 @@ export class TileLayer {
   _loadTile(level, col, row) {
     const tileset = this.tileset;
     if (!tileset) return null;
-    const key = `${level.level}/${col}_${row}`;
+    // 缓存键带上版本：manifest 更新后（同 baseUrl）旧解码不会命中，重新取新瓦片
+    const key = tileset.version
+      ? `v${tileset.version}/${level.level}/${col}_${row}`
+      : `${level.level}/${col}_${row}`;
 
     const cached = this._images.get(key);
     if (cached) {
