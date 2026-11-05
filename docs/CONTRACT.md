@@ -224,6 +224,12 @@ sidebar.js 负责绑定它们。
 - URL 深链 `#dim=<id>&x=<世界X>&z=<世界Z>&s=<缩放>` 优先于默认视野；`#dim=<id>&wp=<路径点id>` 会聚焦该路径点。
 - 想调整"初始看多大一片"：在 `config.json` 里设 `ui.defaultSpanBlocks`（64~16384）。
 
+### 5.z 滚轮 / 指针事件的忽略范围
+
+- **滚轮**：只有 `.marker-popup`、`.zoom-panel`、`.coord-readout`、`.map-hint`、`.scale-bar` 这些自身可能要滚动的 UI 会吞掉滚轮；
+  **鼠标停在路径点标记（`.marker` / `.marker-pin` / `.marker-label`）上时滚轮仍然缩放地图**（锚点为光标位置）。
+- **指针**：`.marker` 仍然忽略拖拽/点击（点标记 = 选中并打开弹窗，不拖动地图）。
+
 ## 6. `assets/js/calibrate.js`（style-dev）—— 校准向导
 
 ```js

@@ -828,7 +828,10 @@ export class MapView {
 
   _onWheel(event) {
     if (this._destroyed) return;
-    if (this._isIgnoredTarget(event.target)) return; // 缩放面板等 UI 上的滚轮交给它们自己
+    // 标记本身不拦滚轮：鼠标停在路径点上也应该缩放地图。
+    // 只有「弹窗 / 缩放面板 / 坐标读数」这类自身可能要滚动的 UI 才拦（否则长描述滚不动）。
+    const hit = typeof event.target?.closest === 'function' ? event.target.closest(IGNORE_SELECTOR) : null;
+    if (hit && hit !== this.viewport && !hit.classList.contains('marker')) return;
 
     // 必须阻止默认行为：Ctrl/⌘ + 滚轮时浏览器会缩放整个页面
     event.preventDefault();
