@@ -14,6 +14,7 @@ assets/js/config.js        config/normalize（Lead 拥有）
 assets/js/coords.js        viewer-dev 拥有（纯函数，无 DOM）
 assets/js/viewer.js        viewer-dev 拥有（平移缩放引擎）
 assets/js/tiles.js         瓦片底图（manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存）
+assets/js/converter.js     坐标换算工具（主世界 ↔ 下界 ÷8 / ×8，见 §11）
 assets/js/markers.js       ui-dev 拥有（标记图层）
 assets/js/sidebar.js       ui-dev 拥有（左侧路径点菜单）
 assets/js/app.js           Lead 拥有（装配所有模块）
@@ -464,3 +465,37 @@ document.body.dataset.base   // 'tiles' | 'image' | 'empty'
   否则 `run.console` 会被正常的缺瓦片刷满。
 - **限制**：瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（会 toast 提示并忽略）；
   `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
+
+### 10.5 版本参数与更新徽标（2026-11-06）
+
+- **`?v=` 版本参数**：`Tileset.urlFor()` 拼 `?v=<generatedAt 净化串>`；瓦片重新生成后 URL 变化，
+  自动绕开 GitHub Pages 静态资源的 HTTP 缓存（默认 `max-age=600`）。缓存键（LRU）同样带版本，
+  同一 baseUrl 换 manifest 后旧解码不会命中。
+- **`generatedAt` 透传**：`Tileset.generatedAt` 保存 manifest 的**原始**字符串（不净化），`toJSON()` 一并输出；
+  manifest 缺失时为 `''`。
+- **更新徽标**：`formatGeneratedAt(iso, now)` 导出纯函数 —— `瓦片更新于 <本地日期>（今天/昨天/N 天前）`。
+  两个日界都取**本地午夜**，`Math.round` 吸收夏令时造成的 23/25 小时天（UTC+8 不会把昨天算成今天）。
+  页脚状态栏（`updateFooterStatus`）在 `state.tileset.generatedAt` 存在时显示该徽标。
+- 回归：`tests/tiles-regressions.test.mjs` 覆盖 generatedAt 透传 / 版本净化 / 徽标文案（今天/昨天/N 天前/非法输入）。
+
+## 11. 坐标换算（`assets/js/converter.js`，2026-11-06）
+
+纯函数 + 面板组件的组合，与地图渲染无关：
+
+```js
+export const NETHER_SCALE = 8;   // 1 下界格 = 8 主世界格
+export function overworldToNether(x, z) // -> { x: Math.round(x/8), z: Math.round(z/8) } | null（输入非法）
+export function netherToOverworld(x, z) // -> { x: x*8, z: z*8 } | null
+export class ConverterPanel {           // 面板：方向切换 / 复制 / 定位 / Esc 关闭，坐标输入接受数字字符串
+  constructor(rootEl, { getCenter, onLocate, onCopy })
+  setOpen(open, { prefill })            // prefill = 视野中心世界坐标 {x,z}
+  isOpen() / convert() / destroy()
+}
+```
+
+- **取整语义**：`Math.round`，负数一半向零取整（`-12.5 → -12`），与 Minecraft（Java）实际传送一致；
+  `-0` 保留符号（`-0.5 → -0`），显示层按 `0` 处理即可。
+- **接线**：`app.js` 的 `initConverter()` 挂到 `#btn-convert`；打开时用 `worldAtViewCenter()` 预填
+  （投影 → `imageToWorld` → 取整），「定位」走 `gotoWorld`。换维度不影响换算本身（只换坐标空间）。
+- 面板在 `#viewport` 内右下角（与测距读数面板同款样式，窄屏 `≤860px` 改铺底）。
+- 回归：`tests/converter.test.mjs`（÷8/×8/往返/字符串输入/非法输入 6 例）。
