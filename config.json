@@ -38,6 +38,18 @@
           "name": "未分组",
           "color": "#ff7ab6",
           "visible": true
+        },
+        {
+          "id": "group",
+          "name": "刷铁机",
+          "color": "#ffbc4b",
+          "visible": true
+        },
+        {
+          "id": "group-2",
+          "name": "熔炉组",
+          "color": "#ff7ab6",
+          "visible": true
         }
       ],
       "waypoints": [
@@ -55,7 +67,7 @@
           "name": "四核刷铁机",
           "x": -40,
           "z": -120,
-          "group": "default",
+          "group": "group",
           "icon": "diamond"
         },
         {
@@ -63,7 +75,7 @@
           "name": "16核刷铁机",
           "x": 68,
           "z": -154,
-          "group": "default",
+          "group": "group",
           "icon": "diamond"
         },
         {
@@ -87,7 +99,7 @@
           "name": "100倍熔炉组",
           "x": -40,
           "z": -139,
-          "group": "default",
+          "group": "group-2",
           "icon": "pin"
         },
         {
@@ -127,7 +139,7 @@
           "name": "27倍熔炉组",
           "x": 743,
           "z": -185,
-          "group": "default",
+          "group": "group-2",
           "icon": "pin"
         },
         {
@@ -143,7 +155,7 @@
           "name": "四核刷铁机",
           "x": 728,
           "z": -184,
-          "group": "default",
+          "group": "group",
           "icon": "pin"
         },
         {
