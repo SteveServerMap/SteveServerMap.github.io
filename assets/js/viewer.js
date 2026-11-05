@@ -138,6 +138,7 @@ export class MapView {
     this._imageSize = null;     // {width, height} 图片原始像素尺寸
     this._projection = null;    // coords.createProjection 的产物
     this._loadToken = 0;        // 连续 setImage 的竞态令牌
+    this._cancelImageLoad = null; // 解除监听并拒绝当前尚未完成的 setImage
     this._pendingAutoFit = false; // setImage 期间用户是否已经手动指定过视图
 
     // ---- 视口尺寸缓存（ResizeObserver 维护，读取时优先用实时 clientWidth） ----
@@ -229,6 +230,7 @@ export class MapView {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    this.cancelImageLoad();
 
     this._cancelAnim();
     if (this._resizeObserver) {
@@ -311,6 +313,7 @@ export class MapView {
     const w = this.viewport.clientWidth;
     const h = this.viewport.clientHeight;
     if (!(w > 0) || !(h > 0)) return;
+    this._cancelAnim();
 
     const prevW = this._viewWidth;
     const prevH = this._viewHeight;
@@ -340,32 +343,67 @@ export class MapView {
     this._emit();
   }
 
+  /** 取消尚未完成的图片加载；立即以 AbortError 拒绝旧 Promise，不等待网络事件。 */
+  cancelImageLoad() {
+    this._loadToken += 1;
+    if (this._cancelImageLoad) this._cancelImageLoad();
+  }
+
   /**
    * 载入基底图（单张图片）。resolve 后 getImageSize() 可用；失败时 reject（不抛同步异常）。
+   * 被新图片 / 栅格替换、取消或销毁时以 AbortError reject。
    * 调用它会把底图元素切回 <img id="map-image">。
    * @param {string} url
    * @returns {Promise<{width:number, height:number}>}
    */
   setImage(url) {
+    if (this._destroyed) return Promise.reject(new Error('[MapView] 已销毁'));
     const img = this.imgEl || this.imageEl;
     if (!img) return Promise.reject(new Error('[MapView] 找不到 #map-image 元素'));
     if (!url || typeof url !== 'string') {
       return Promise.reject(new Error('[MapView] setImage 需要一个图片地址'));
     }
+    this._cancelAnim();
+    this.cancelImageLoad();
     // 从瓦片维度切回来时，底图元素要换回 <img>
     this.setBaseLayer(img);
 
-    this._loadToken += 1;
     const token = this._loadToken;
     this._pendingAutoFit = true; // 新图载入后若用户没动过视图，自动整图适配
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       const cleanup = () => {
         img.removeEventListener('load', onLoad);
         img.removeEventListener('error', onError);
+        if (this._cancelImageLoad === cancel) this._cancelImageLoad = null;
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const cancel = () => {
+        const error = new Error(`[MapView] 图片加载已取消：${url}`);
+        error.name = 'AbortError';
+        fail(error);
       };
 
-      const finish = (width, height) => {
+      const onLoad = () => {
+        if (settled) return;
+        if (token !== this._loadToken || this._destroyed) {
+          cancel();
+          return;
+        }
+        const width = img.naturalWidth || 0;
+        const height = img.naturalHeight || 0;
+        if (!(width > 0) || !(height > 0)) {
+          fail(new Error(`[MapView] 图片尺寸无效：${url}`));
+          return;
+        }
+        settled = true;
+        cleanup();
         this._imageSize = { width, height };
         this._applyImageSize(width, height);
         if (this._pendingAutoFit) this._fitNow();
@@ -374,40 +412,31 @@ export class MapView {
         resolve({ width, height });
       };
 
-      const onLoad = () => {
-        cleanup();
-        if (token !== this._loadToken || this._destroyed) return; // 被后一次 setImage 抢跑
-        const width = img.naturalWidth || 0;
-        const height = img.naturalHeight || 0;
-        if (!(width > 0) || !(height > 0)) {
-          reject(new Error(`[MapView] 图片尺寸无效：${url}`));
+      const onError = () => {
+        if (token !== this._loadToken || this._destroyed) {
+          cancel();
           return;
         }
-        finish(width, height);
+        fail(new Error(`[MapView] 地图图片加载失败：${url}`));
       };
 
-      const onError = () => {
-        cleanup();
-        if (token !== this._loadToken || this._destroyed) return;
-        reject(new Error(`[MapView] 地图图片加载失败：${url}`));
-      };
-
+      this._cancelImageLoad = cancel;
       img.addEventListener('load', onLoad);
       img.addEventListener('error', onError);
 
       // 同一张图已在缓存里时浏览器不会再触发 load，这里手动收尾
       const sameSrc = img.getAttribute('src') === url;
       if (sameSrc && img.complete && img.naturalWidth > 0) {
-        cleanup();
-        finish(img.naturalWidth, img.naturalHeight);
+        onLoad();
         return;
       }
 
-      img.src = url;
-      // 极端情况：赋值后同步就 complete（data: URL、已缓存的小图等）
-      if (img.complete && img.naturalWidth > 0 && img.getAttribute('src') === url) {
-        cleanup();
-        finish(img.naturalWidth, img.naturalHeight);
+      try {
+        img.src = url;
+        // 极端情况：赋值后同步就 complete（data: URL、已缓存的小图等）
+        if (img.complete && img.naturalWidth > 0 && img.getAttribute('src') === url) onLoad();
+      } catch (error) {
+        fail(error);
       }
     });
   }
@@ -435,6 +464,7 @@ export class MapView {
    * @returns {Promise<{width:number, height:number}>}
    */
   setRasterBase({ width, height, element } = {}) {
+    if (this._destroyed) return Promise.reject(new Error('[MapView] 已销毁'));
     const w = Number(width);
     const h = Number(height);
     if (!(w > 0) || !(h > 0)) {
@@ -443,8 +473,9 @@ export class MapView {
     const layer = element || this.canvasEl;
     if (!layer) return Promise.reject(new Error('[MapView] 找不到瓦片底图 <canvas id="map-canvas">'));
 
-    // 抢占 setImage 的竞态令牌：之前的图片加载即使回来了也不再改尺寸
-    this._loadToken += 1;
+    // 抢占 setImage：旧 Promise 立即结束，旧动画也不能覆盖新尺寸下的视图
+    this._cancelAnim();
+    this.cancelImageLoad();
     this.setBaseLayer(layer);
     this._pendingAutoFit = true;
     this._imageSize = { width: w, height: h };

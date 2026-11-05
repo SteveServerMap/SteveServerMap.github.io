@@ -22,8 +22,8 @@
  *     一样被 #stage 的 transform 缩放，markers / measure / sidebar / popup 全部不用改；
  *   - canvas 的**位图**尺寸 = 当前层级的整幅栅格（imageWidth/2^L × imageHeight/2^L），
  *     每个瓦片按 256×256 原样贴上去 → 不缩放、不插值；
- *   - 每次视图变化只贴「当前视口覆盖到的瓦片」，其余区域保持上一次画好的内容
- *     （canvas 是持久的整幅栅格，贴图是幂等的，不需要清屏）；
+ *   - 每帧先清屏，再贴「当前视口覆盖到的瓦片」，避免半透明像素反复叠加，
+ *     也避免层级切换后留下旧栅格内容；
  *   - 放大（1 瓦片像素 > 1 屏幕像素）时关掉 imageSmoothingEnabled，保持像素锐利；
  *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），一律静默跳过；
  *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求。
@@ -305,6 +305,7 @@ export class TileLayer {
     this._missing = new Set();
     /** 正在请求中的瓦片 */
     this._pending = new Set();
+    this._generation = 0;    // reset 后旧请求不得影响新一代的缓存 / pending
 
     this._active = false;
     this._level = null;      // 当前层级对象
@@ -328,7 +329,7 @@ export class TileLayer {
   /* ------------------------------------------------------------------ */
 
   /**
-   * 换一份瓦片集。同一个 baseUrl 时保留缓存与已画好的内容（来回切维度不用重新下载）。
+   * 换一份瓦片集。同一个 baseUrl 时保留缓存（来回切维度不用重新下载）。
    * @param {Tileset|null} tileset
    */
   setTileset(tileset) {
@@ -380,6 +381,8 @@ export class TileLayer {
 
   /** 清空画面与（可选）缓存 */
   reset({ keepCache = true } = {}) {
+    this._generation += 1;
+    this._pending.clear();
     this._cancelFrame();
     this._clearCanvas();
     this._level = null;
@@ -388,7 +391,6 @@ export class TileLayer {
     if (!keepCache) {
       this._images.clear();
       this._missing.clear();
-      this._pending.clear();
       this._requests = 0;
       this._loaded = 0;
       this._missingCount = 0;
@@ -476,6 +478,7 @@ export class TileLayer {
     // （dpr 只参与这个判断和层级选择，不参与位图尺寸，避免 MAX_CANVAS_PIXELS 被 dpr² 放大）
     const screenDevicePxPerCanvasPx = (scale * bpp * dpr) / factor;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = screenDevicePxPerCanvasPx < 1;
     if (canvas.style) {
       canvas.style.imageRendering = screenDevicePxPerCanvasPx >= 1 ? 'pixelated' : 'auto';
@@ -590,14 +593,15 @@ export class TileLayer {
 
   _request(key, url) {
     if (typeof Image !== 'function') return;
+    const generation = this._generation;
     const img = new Image();
     img.decoding = 'async';
     this._pending.add(key);
     this._requests += 1;
 
     img.onload = () => {
+      if (this._destroyed || generation !== this._generation) return;
       this._pending.delete(key);
-      if (this._destroyed) return;
       if (!img.naturalWidth || !img.naturalHeight) {
         this._markMissing(key);
         return;
@@ -608,16 +612,15 @@ export class TileLayer {
     };
     // 404 / 解码失败都是正常情况（全透明瓦片不导出）：静默忽略，不再重试
     img.onerror = () => {
+      if (this._destroyed || generation !== this._generation) return;
       this._pending.delete(key);
-      if (this._destroyed) return;
       this._markMissing(key);
     };
 
     try {
       img.src = url;
     } catch {
-      this._pending.delete(key);
-      this._markMissing(key);
+      img.onerror();
     }
   }
 

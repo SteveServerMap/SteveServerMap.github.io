@@ -10,7 +10,7 @@
  */
 
 import { loadConfig } from './config.js';
-import { createProjection } from './coords.js';
+import { createProjection, normalizeCalibration } from './coords.js';
 import { MapView } from './viewer.js';
 import { MarkerLayer } from './markers.js';
 import { MeasureLayer, formatDistance } from './measure.js';
@@ -397,7 +397,31 @@ async function applyDimension(dimensionId, opts = {}) {
   tryCall(sidebar, 'setDimensions', state.config.dimensions, dim.id);
   tryCall(sidebar, 'setActiveWaypoint', null);
   tryCall(sidebar, 'setLoading', true);
+  tryCall(sidebar, 'setCalibrationNotice', false);
+  document.body.dataset.calibrated = '0';
   tryCall(markers, 'setData', [], [], null);
+
+  // 在任何 await / 缺图返回之前清掉旧维度的状态与加载任务。
+  tryCall(view, 'cancelImageLoad');
+  tryCall(view, 'setProjection', null);
+  if (tileLayer) tileLayer.setActive(false);
+  setBaseLayerMode('empty');
+  const measurePointsBeforeSwitch = measure ? measure.points.length : 0;
+  tryCall(measure, 'setProjection', null);
+  tryCall(measure, 'clear');
+  updateMeasureReadout();
+  state.query = '';
+  const search = $('waypoint-search');
+  if (search) search.value = '';
+  tryCall(sidebar, 'clearSearch');
+  tryCall(markers, 'setFilter', null);
+  handlePointerMove(null);
+  updateScaleBar(safeViewState());
+  drawGrid(safeViewState());
+  if (measurePointsBeforeSwitch > 0) {
+    toast(`切换维度已清空 ${measurePointsBeforeSwitch} 个测量点`, 'info', 2600);
+  }
+
   hideMapState();
   showMapState({
     tone: 'loading',
@@ -411,9 +435,12 @@ async function applyDimension(dimensionId, opts = {}) {
   if (dim.tiles) {
     try {
       tileset = await loadTileset(dim.tiles.manifest);
+      if (token !== state.loadToken) return;
       await view.setRasterBase({ width: tileset.imageWidth, height: tileset.imageHeight });
+      if (token !== state.loadToken) return;
       size = { width: tileset.imageWidth, height: tileset.imageHeight };
     } catch (err) {
+      if (token !== state.loadToken) return;
       console.warn(`[app] 瓦片底图加载失败：${dim.tiles.manifest}`, err);
       tileset = null;
       size = null;
@@ -426,8 +453,10 @@ async function applyDimension(dimensionId, opts = {}) {
     } else {
       try {
         size = await view.setImage(dim.image);
+        if (token !== state.loadToken) return;
         if (!size && view.getImageSize) size = view.getImageSize();
       } catch (err) {
+        if (token !== state.loadToken) return;
         console.warn(`[app] 基底图加载失败：${dim.image}`, err);
         size = null;
       }
@@ -471,11 +500,7 @@ async function applyDimension(dimensionId, opts = {}) {
   tryCall(view, 'setProjection', state.projection);
   // 瓦片底图：canvas 与 TileLayer 接线（单张图片时停用，避免继续请求瓦片）
   applyBaseLayer(tileset);
-  // 换维度时测量点不再有效：先记下数量再清空（提示要用）
-  const measurePointsBeforeSwitch = measure ? measure.points.length : 0;
   tryCall(measure, 'setProjection', state.projection);
-  tryCall(measure, 'clear');
-  updateMeasureReadout();
 
   // 视角：优先 URL 深链 → 该维度上次的视角 → 默认聚焦世界原点
   const hash = opts.hash || readHash();
@@ -485,17 +510,6 @@ async function applyDimension(dimensionId, opts = {}) {
   }
   // 视角定了之后立刻画一帧瓦片（之后的平移缩放由 onViewChange 驱动）
   if (tileLayer) tileLayer.update(safeViewState());
-
-  // 换维度后旧的搜索词/测量结果都不适用了，清掉并说清楚（否则会以为"这个维度没有点"）
-  if (state.query) {
-    state.query = '';
-    const search = $('waypoint-search');
-    if (search) search.value = '';
-    tryCall(sidebar, 'clearSearch');
-  }
-  if (measurePointsBeforeSwitch > 0) {
-    toast(`切换维度已清空 ${measurePointsBeforeSwitch} 个测量点`, 'info', 2600);
-  }
 
   pushDataToSidebar();
   refreshMarkers();
@@ -519,7 +533,7 @@ async function applyDimension(dimensionId, opts = {}) {
 function setBaseLayerMode(mode) {
   const img = $('map-image');
   const canvas = $('map-canvas');
-  if (img) img.hidden = mode === 'tiles';
+  if (img) img.hidden = mode !== 'image';
   if (canvas) canvas.hidden = mode !== 'tiles';
   document.body.dataset.base = mode;
 }
@@ -974,37 +988,12 @@ function buildProjection(calibration, imageSize) {
   return proj;
 }
 
-/** 合并 config.json 与浏览器本地校准覆盖，解析出最终画幅 */
+/** 图片尺寸就绪后，统一由坐标模块解析配置中的两种校准写法。 */
 function resolveCalibration(dim, imageSize) {
-  const base = dim.calibration || {};
-  let xMin = Number(base.xMin);
-  let xMax = Number(base.xMax);
-  let zMin = Number(base.zMin);
-  let zMax = Number(base.zMax);
-
-  if (![xMin, xMax, zMin, zMax].every(Number.isFinite)) {
-    // 「缩放 + 原点」写法
-    const ppb = Number(base.pixelsPerBlock);
-    const ox = Number(base.originX);
-    const oz = Number(base.originZ);
-    if (Number.isFinite(ppb) && ppb > 0 && Number.isFinite(ox) && Number.isFinite(oz) && imageSize) {
-      xMin = ox;
-      zMin = oz;
-      xMax = ox + imageSize.width / ppb;
-      zMax = oz + imageSize.height / ppb;
-    } else {
-      return null;
-    }
-  }
-  return {
-    xMin: Math.min(xMin, xMax),
-    xMax: Math.max(xMin, xMax),
-    zMin: Math.min(zMin, zMax),
-    zMax: Math.max(zMin, zMax),
-    flipZ: base.flipZ === true,
-    calibrated: base.calibrated === true,
-    note: base.note || '',
-  };
+  return normalizeCalibration(dim.calibration, {
+    imageWidth: imageSize?.width,
+    imageHeight: imageSize?.height,
+  });
 }
 
 function applyCalibration(calibration) {
@@ -1062,7 +1051,7 @@ function toggleGrid() {
 const GRID_STEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
 
 function drawGrid(vs) {
-  if (!gridCtx || !gridCanvas || !state.grid || !vs || !state.projection) return;
+  if (!gridCtx || !gridCanvas || !vs) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = gridCanvas.clientWidth || vs.viewWidth || 0;
   const h = gridCanvas.clientHeight || vs.viewHeight || 0;
@@ -1074,6 +1063,7 @@ function drawGrid(vs) {
   const ctx = gridCtx;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  if (!state.grid || !state.projection) return;
 
   const cal = state.calibration;
   if (!cal) return;

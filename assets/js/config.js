@@ -19,6 +19,7 @@ const DEFAULT_UI = {
   grid: false,
   startCollapsed: false,
   showCoords: true,
+  defaultSpanBlocks: 1024,
 };
 
 const DEFAULT_GROUP_COLOR = '#8fa3a0';
@@ -122,6 +123,11 @@ function normalizeUi(rawUi, warnings) {
   if (typeof rawUi.grid === 'boolean') ui.grid = rawUi.grid;
   if (typeof rawUi.startCollapsed === 'boolean') ui.startCollapsed = rawUi.startCollapsed;
   if (typeof rawUi.showCoords === 'boolean') ui.showCoords = rawUi.showCoords;
+  if (rawUi.defaultSpanBlocks !== undefined) {
+    const span = rawUi.defaultSpanBlocks;
+    if (Number.isInteger(span) && span >= 64 && span <= 16384) ui.defaultSpanBlocks = span;
+    else warnings.push('ui.defaultSpanBlocks 应为 64..16384 的整数，已使用默认值 1024');
+  }
   return ui;
 }
 
