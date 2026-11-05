@@ -79,6 +79,8 @@ export class MapView {
    * @param {(imagePoint: {px:number, py:number}) => void} [options.onDoubleClick]
    * @param {number} [options.minScale=0.05]
    * @param {number} [options.maxScale=8]
+   * @param {boolean} [options.minScaleFit=false] 为 true 时最小缩放取「整图适配」（地图最多缩到铺满视口，不会变成一个点）
+   * @param {number} [options.minScaleFitFactor=1] 配合 minScaleFit 使用：1 = 整图；0.9 = 允许比整图再小 10%
    */
   constructor(viewportEl, {
     onViewChange,
@@ -87,6 +89,8 @@ export class MapView {
     onDoubleClick,
     minScale = 0.05,
     maxScale = 8,
+    minScaleFit = false,
+    minScaleFitFactor = 1,
   } = {}) {
     if (!viewportEl || typeof viewportEl.querySelector !== 'function') {
       throw new Error('[MapView] 构造函数需要一个 #viewport 元素');
@@ -112,6 +116,9 @@ export class MapView {
       console.warn('[MapView] maxScale 必须大于 minScale，已重置为 minScale * 10。');
       this.maxScale = this.minScale * 10;
     }
+    this._minScaleFit = minScaleFit === true;
+    const fitFactor = Number(minScaleFitFactor);
+    this._minScaleFitFactor = isNum(fitFactor) && fitFactor > 0 ? Math.min(1, fitFactor) : 1;
     this.scale = Math.min(this.maxScale, Math.max(this.minScale, 1));
 
     // ---- 平移量（视口 CSS 像素） ----
@@ -308,6 +315,18 @@ export class MapView {
       this.ty = h / 2 - cy * this.scale;
     }
 
+    // 视口尺寸变了 → 「整图适配」也变了，当前比例可能已经低于新的下限
+    if (this._minScaleFit && this._imageSize) {
+      const min = this._effectiveMinScale();
+      if (this.scale < min - 1e-9) {
+        const cx = (w / 2 - this.tx) / this.scale;
+        const cy = (h / 2 - this.ty) / this.scale;
+        this.scale = min;
+        this.tx = w / 2 - cx * min;
+        this.ty = h / 2 - cy * min;
+      }
+    }
+
     this._applyTransform();
     this._emit();
   }
@@ -472,9 +491,10 @@ export class MapView {
       console.warn(`[MapView] 非法缩放值已忽略：${String(value)}（保持当前比例）`);
       return fallback;
     }
-    if (v < this.minScale) {
+    const minScale = this._effectiveMinScale();
+    if (v < minScale) {
       this._warnClamp();
-      return this.minScale;
+      return minScale;
     }
     if (v > this.maxScale) {
       this._warnClamp();
@@ -488,7 +508,7 @@ export class MapView {
     const t = nowMs();
     if (t - this._lastClampWarn < 1200) return;
     this._lastClampWarn = t;
-    console.warn(`[MapView] 缩放比例超出范围，已钳制到 [${this.minScale}, ${this.maxScale}]。`);
+    console.warn(`[MapView] 缩放比例超出范围，已钳制到 [${this._effectiveMinScale()}, ${this.maxScale}]。`);
   }
 
   /* ====================================================================== */
@@ -538,13 +558,30 @@ export class MapView {
   }
 
   /** 整图适配比例 */
-  _fitScale(padding) {
+  /** 不钳制的「整图适配」比例（内部用，避免和动态下限互相递归） */
+  _rawFitScale(padding = 24) {
     if (!this._imageSize) return this.scale;
     const { width, height } = this._viewSize();
     const p = Math.max(0, Number(padding) || 0);
     const usableW = Math.max(1, width - p * 2);
     const usableH = Math.max(1, height - p * 2);
-    const raw = Math.min(usableW / this._imageSize.width, usableH / this._imageSize.height);
+    return Math.min(usableW / this._imageSize.width, usableH / this._imageSize.height);
+  }
+
+  /**
+   * 实际生效的最小缩放。
+   * 默认就是构造参数 minScale（老行为）；开启 minScaleFit 后不小于「整图适配」，
+   * 这样无论怎么滚轮缩小，地图最多缩到刚好铺满视口，不会缩成一个看不清的小点。
+   */
+  _effectiveMinScale() {
+    if (!this._minScaleFit || !this._imageSize) return this.minScale;
+    const fit = this._rawFitScale(24) * (this._minScaleFitFactor || 1);
+    return Math.max(this.minScale, Math.min(this.maxScale, fit));
+  }
+
+  _fitScale(padding) {
+    if (!this._imageSize) return this.scale;
+    const raw = this._rawFitScale(padding);
     return this._resolveScale(raw, this.scale);
   }
 

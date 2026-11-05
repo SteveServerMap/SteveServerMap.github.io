@@ -138,6 +138,14 @@ export class MapView {
 
 ---
 
+### 3.x 缩放下限：整图适配（2026-11-05）
+
+- 构造参数新增 `minScaleFit`（默认 `false` 保持老行为；站点在 `app.js` 里开启 `true`）与 `minScaleFitFactor`（默认 `1`，可设 `0.9` 允许比整图再小 10%）。
+- 开启后 `_effectiveMinScale()` = `max(minScale, 整图适配比例 × factor)`：**怎么滚轮缩小，地图最多缩到刚好铺满视口**，不会缩成一个点。
+- `_fitScale()` 拆成 `_rawFitScale()`（不钳制）+ `_fitScale()`（钳制），避免和动态下限互相递归。
+- 视口尺寸变化（窗口缩放 / 侧栏收起）时 `_onResize()` 会按新的整图比例重新钳制当前缩放。
+- 深链里的 `s` 值同样走 `_resolveScale`，过小的值会被钳制到整图比例。
+
 ## 4. `assets/js/markers.js`（ui-dev）—— 标记图层
 
 ```js

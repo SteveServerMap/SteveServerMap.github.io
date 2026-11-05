@@ -168,8 +168,11 @@ function initViewer() {
   gridCtx = gridCanvas.getContext('2d');
 
   view = new MapView(viewport, {
+    // 最小缩放 = 整图适配（minScaleFit），避免滚轮把地图缩成一个点
     minScale: 0.02,
     maxScale: 8,
+    minScaleFit: true,
+    minScaleFitFactor: 1,
     onViewChange: handleViewChange,
     onMapClick: handleMapClick,
     onMapPointerMove: handlePointerMove,
