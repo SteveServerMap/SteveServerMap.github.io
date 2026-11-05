@@ -2,6 +2,18 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 测距工具（2026-11-05）
+
+- 新增 `assets/js/measure.js`（MeasureLayer）：两点距离、多段折线（每段独立标注）、总长、虚线预览、路径点吸附。
+- 站点 UI：顶栏 `#btn-measure`、左下角读数面板 `#measure-readout`（总长 / 逐段 / 撤销 / 清空 / 退出）、
+  SVG 图层 `.measure-layer`；快捷键 `Backspace`（撤销）、`Enter`/`Esc`（退出）。
+- 关键设计：测量点存**世界坐标**，视图变化只重算屏幕坐标 → 缩放/平移后距离不变；吸附在图片像素空间判定（`14/scale`）。
+- smoke 新增 3 项：
+  - `measure.two`：`(0,0)→(300,400)` = **500 格**，段标注 + 总长标注 + 读数面板齐备 ✓
+  - `measure.polyline`：三点两段 `100 / 240`，合计 **340 格**，折线 3 个顶点、面板有「合计」行 ✓
+  - `measure.interact`：真实点击地图加点并**吸附到路径点 `wp`**、撤销/清空、`Esc` 退出 ✓
+- 回归：其余检查结果与改动前一致（仍是那 5 项数据耦合失败：`pos.zoom`/`pos.drag`/`cal.crop-change`/`sidebar.search`/`deep-link`）。
+
 ## 站内校准向导移除（2026-11-05）
 
 - 移除：顶栏「校准」按钮、提示条「去校准」链接、`#calibrator` 弹窗、`assets/js/calibrate.js`（41KB）、

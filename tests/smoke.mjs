@@ -1941,6 +1941,139 @@ async function main() {
     }
   });
 
+  /* ---------------- 6d. 测距工具 ---------------- */
+  await checkIfReady('measure.two', '测距：两点距离与总长正确（(0,0)→(300,400) = 500 格）', async () => {
+    const opened = await page.evalFn(() => {
+      const button = document.getElementById('btn-measure');
+      if (!button) throw new Error('缺少 #btn-measure');
+      button.click();
+      window.__mapApp.clearMeasure();
+      window.__mapApp.addMeasurePoint(0, 0);
+      window.__mapApp.addMeasurePoint(300, 400);
+      const summary = window.__mapApp.measureSummary();
+      return {
+        active: window.__mapApp.state.measureActive,
+        pressed: button.getAttribute('aria-pressed'),
+        panelHidden: document.getElementById('measure-readout')?.hidden,
+        segments: summary.segments.map((v) => Math.round(v * 10) / 10),
+        total: Math.round(summary.total),
+        labels: [...document.querySelectorAll('.measure-seg-label')].map((el) => el.textContent),
+        totalLabel: document.querySelector('.measure-total-label')?.textContent ?? null,
+        listItems: [...document.querySelectorAll('#measure-list li')].map((li) => li.textContent),
+      };
+    });
+    if (!opened.active || opened.pressed !== 'true') {
+      throw new Error(`点「测量」后状态不对：active=${opened.active} aria-pressed=${opened.pressed}`);
+    }
+    if (opened.panelHidden !== false) throw new Error('测量读数面板 #measure-readout 未显示');
+    if (opened.total !== 500 || opened.segments.length !== 1) {
+      throw new Error(`两点距离应为 500 格，实际 segments=${JSON.stringify(opened.segments)} total=${opened.total}`);
+    }
+    if (!opened.labels.some((t) => /500/.test(t))) {
+      throw new Error(`画布上没有 500 格的段标注：${JSON.stringify(opened.labels)}`);
+    }
+    if (!(opened.totalLabel || '').includes('总长')) {
+      throw new Error(`缺少总长标注：${opened.totalLabel}`);
+    }
+    if (!opened.listItems.some((t) => /500/.test(t))) {
+      throw new Error(`读数面板没有段距离：${JSON.stringify(opened.listItems)}`);
+    }
+    return `500 格 · 标注「${opened.labels[0]}」· 总长「${opened.totalLabel}」`;
+  });
+
+  await checkIfReady('measure.polyline', '测距：多段折线每段独立标注、合计正确（100+240=340）', async () => {
+    const result = await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.addMeasurePoint(0, 0);
+      window.__mapApp.addMeasurePoint(100, 0);
+      window.__mapApp.addMeasurePoint(100, 240);
+      const summary = window.__mapApp.measureSummary();
+      return {
+        segments: summary.segments.map((v) => Math.round(v)),
+        total: Math.round(summary.total),
+        segLabels: [...document.querySelectorAll('.measure-seg-label')].map((el) => el.textContent),
+        listItems: [...document.querySelectorAll('#measure-list li')].map((li) => li.textContent),
+        pathPoints: document.querySelector('.measure-line')?.getAttribute('points') ?? '',
+      };
+    });
+    if (result.segments.join(',') !== '100,240') {
+      throw new Error(`分段应为 [100, 240]，实际 ${JSON.stringify(result.segments)}`);
+    }
+    if (result.total !== 340) throw new Error(`合计应为 340，实际 ${result.total}`);
+    if (result.segLabels.length !== 2) {
+      throw new Error(`画布上应有 2 个段标注，实际 ${JSON.stringify(result.segLabels)}`);
+    }
+    if (!result.listItems.some((t) => /合计\s*340/.test(t))) {
+      throw new Error(`读数面板缺少合计行：${JSON.stringify(result.listItems)}`);
+    }
+    if (result.pathPoints.split(' ').filter(Boolean).length !== 3) {
+      throw new Error(`折线应有 3 个顶点，实际 points="${result.pathPoints}"`);
+    }
+    return `2 段 100 / 240 · 合计 340 格`;
+  });
+
+  await checkIfReady('measure.interact', '测距：点地图可加点并吸附路径点、可撤销、Esc 退出', async () => {
+    await ensureSidebarOpen();
+    const target = await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      if (!window.__mapApp.state.measureActive) document.getElementById('btn-measure').click();
+      const waypoint = window.__mapApp.state.dimension.waypoints[0];
+      if (!waypoint) return null;
+      const client = window.__mapApp.view.worldToClient(waypoint.x, waypoint.z);
+      return {
+        id: waypoint.id,
+        world: { x: waypoint.x, z: waypoint.z },
+        client: { x: Math.round(client.x), y: Math.round(client.y) },
+      };
+    });
+    if (!target) throw new Error('当前维度没有路径点，无法验证吸附');
+
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.client.x, y: target.client.y, button: 'none' });
+    await page.settle(120);
+    await page.click(target.client.x, target.client.y);
+    await page.settle(360);
+
+    const afterClick = await page.evalFn(() => {
+      const summary = window.__mapApp.measureSummary();
+      return { points: summary.points, lastClick: window.__measureLastClick ?? null };
+    });
+    if (afterClick.points.length !== 1) {
+      throw new Error(`点地图应加 1 个测量点，实际 ${afterClick.points.length}（lastClick=${JSON.stringify(afterClick.lastClick)}）`);
+    }
+    const point = afterClick.points[0];
+    if (Math.abs(point.x - target.world.x) > 0.01 || Math.abs(point.z - target.world.z) > 0.01) {
+      throw new Error(`应吸附到路径点 ${target.id}(${target.world.x}, ${target.world.z})，实际 (${point.x}, ${point.z})`);
+    }
+
+    // 再点一次加点 → 撤销 → 清空
+    await page.evalFn(
+      (world) => window.__mapApp.addMeasurePoint(world.x + 100, world.z),
+      target.world,
+    );
+    const undo = await page.evalFn(() => {
+      const before = window.__mapApp.measureSummary().points.length;
+      window.__mapApp.undoMeasurePoint();
+      const after = window.__mapApp.measureSummary().points.length;
+      window.__mapApp.clearMeasure();
+      return { before, after, cleared: window.__mapApp.measureSummary().points.length };
+    });
+    if (!(undo.before === 2 && undo.after === 1 && undo.cleared === 0)) {
+      throw new Error(`撤销/清空行为不对：${JSON.stringify(undo)}`);
+    }
+
+    // Esc 退出测距
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await page.settle(260);
+    const exited = await page.evalFn(() => ({
+      active: window.__mapApp.state.measureActive,
+      pressed: document.getElementById('btn-measure')?.getAttribute('aria-pressed'),
+    }));
+    if (exited.active !== false || exited.pressed !== 'false') {
+      throw new Error(`Esc 后仍未退出测距：${JSON.stringify(exited)}`);
+    }
+    return `吸附到「${target.id}」· 撤销/清空正常 · Esc 退出`;
+  });
+
   /* ---------------- 7. 窄屏 ---------------- */
   await checkIfReady(
     'narrow.layout',

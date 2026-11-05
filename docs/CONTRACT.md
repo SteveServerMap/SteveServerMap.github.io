@@ -239,6 +239,34 @@ sidebar.js 负责绑定它们。
 - `#calibration-notice` 仍在（画幅未校准时提示），只是不再带按钮。
 - `assets/css/style.css` 的 07 段（校准向导样式）已删除。
 
+### 5.y 测距（`assets/js/measure.js`）
+
+```js
+export function distanceBetween(a, b)      // 世界坐标两点距离（格）
+export function formatDistance(value)      // 展示用格式化（<100 保留 1 位小数）
+export class MeasureLayer {
+  constructor(overlayEl)                   // 往 #overlay 里插一个 <svg class="measure-layer">
+  setProjection(projection)
+  setActive(bool)                          // 测距模式开关
+  addPoint({x, z, snapped?})               // 加测量点，返回 { index, segment }
+  undo() / clear()
+  setHover({x, z} | null)                  // 鼠标预览段（虚线 + 实时距离）
+  update(viewState)                         // 视图变化时重排（app.js 的 handleViewChange 调）
+  get segments() / get total() / get summary()  // { points, segments, total, active }
+}
+```
+
+- 测量点存**世界坐标**，缩放/平移/换画幅都不会错位；每次视图变化由 app.js 调 `update(viewState)` 重绘。
+- 渲染：`polyline.measure-line`（实线）、`polyline.measure-preview`（虚线预览）、`g.measure-vertices`（顶点，起点带「起点」标签）、
+  `g.measure-labels`（每段 `text.measure-seg-label` + 末尾 `text.measure-total-label`「总长 X 格」）。
+- 交互（app.js 负责）：顶栏 `#btn-measure` 开关；`handleMapClick` 在测距模式下优先加点（不走路径点选中）；
+  吸附判定在**图片像素**空间做（`tolPx = 14 / scale`），命中最近路径点则改用该点的世界坐标；
+  `Backspace` 撤销、`Enter`/`Esc` 退出；读数面板 `#measure-readout`（总长 / 逐段 / 撤销 / 清空 / 退出）。
+- 测距模式下 `body.is-measuring` 会禁用 `.marker / .marker-pin / .marker-label` 的 `pointer-events`，
+  否则标记会吞掉点击、也没法吸附（与 `.is-picking` 同一套写法）。
+- 调试接口：`window.__mapApp.measure` / `measureSummary()` / `addMeasurePoint(x, z)` / `toggleMeasure()` /
+  `undoMeasurePoint()` / `clearMeasure()`；最近一次点击记在 `window.__measureLastClick`。
+
 ## 6. 配置格式（`config.json`）
 
 ```jsonc

@@ -34,6 +34,10 @@
     <div class="topbar-right">
       <div id="dimension-switch" class="dimension-switch" role="tablist" aria-label="维度切换"></div>
       <div class="topbar-sep" aria-hidden="true"></div>
+      <button id="btn-measure" class="btn ghost" type="button" aria-pressed="false"
+              title="测距：点地图加测量点，可多段；Backspace 撤销上一点，Enter 结束，Esc 退出">
+        <svg class="icon" aria-hidden="true"><use href="#i-ruler"></use></svg><span>测量</span>
+      </button>
       <button id="btn-copy-link" class="btn ghost" type="button" title="复制当前视角链接">
         <svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>分享</span>
       </button>
@@ -140,6 +144,19 @@
         <div id="coord-readout" class="coord-readout" hidden>X — Z —</div>
         <div id="map-hint" class="map-hint">滚轮缩放 · 拖拽平移 · 点击路径点查看详情</div>
         <div id="scale-bar" class="scale-bar" hidden><span class="scale-bar-line"></span><span id="scale-bar-label">100 方块</span></div>
+
+    <!-- 测量读数（测量模式下显示在左下角） -->
+    <div id="measure-readout" class="measure-readout" hidden aria-live="polite">
+      <div class="measure-head">
+        <span class="measure-title">测距</span>
+        <span id="measure-total" class="measure-total">0 格</span>
+        <button id="measure-undo" class="link-btn" type="button" title="撤销上一点 (Backspace)">撤销</button>
+        <button id="measure-clear" class="link-btn" type="button" title="清空测量">清空</button>
+        <button id="measure-exit" class="link-btn" type="button" title="退出测量 (Esc)">退出</button>
+      </div>
+      <ol id="measure-list" class="measure-list"></ol>
+      <p id="measure-hint" class="measure-hint">点地图添加测量点 · 可直接点在路径点上（会吸附）</p>
+    </div>
       </div>
     </main>
   </div>
@@ -169,6 +186,7 @@
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a4.5 4.5 0 006.4 0l2-2a4.5 4.5 0 10-6.4-6.4l-1 1"/><path d="M14 11a4.5 4.5 0 00-6.4 0l-2 2A4.5 4.5 0 1012 19.4l1-1"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M4 15l11-11 5 5-11 11z"/><path d="M8 11l2 2M11 8l2 2M5 14l2 2"/></symbol>
     <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M14.5 5l-7 7 7 7"/></symbol>
     <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9.5 5l7 7-7 7"/></symbol>
     <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M5 9.5l7 7 7-7"/></symbol>
@@ -188,4 +206,5 @@
 <script type="module" src="assets/js/app.js"></script>
 </body>
 </html>
+
 

@@ -2564,3 +2564,173 @@ body[data-sidebar="collapsed"] .sidebar,
 .wp-group.is-collapsed .wp-group-items {
   display: none;
 }
+
+/* ==========================================================================
+   测量工具（#measure-* / .measure-*）
+   ========================================================================== */
+
+.measure-layer {
+  pointer-events: none;
+}
+
+.measure-line {
+  stroke: var(--accent, #5ad26f);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
+}
+
+.measure-preview {
+  stroke: var(--accent, #5ad26f);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+
+.measure-vertex {
+  fill: #0d120e;
+  stroke: var(--accent, #5ad26f);
+  stroke-width: 2;
+}
+
+.measure-vertex:first-child {
+  fill: var(--accent, #5ad26f);
+}
+
+.measure-vertex-label,
+.measure-seg-label,
+.measure-total-label {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  paint-order: stroke;
+  stroke: rgba(6, 10, 7, 0.92);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+  fill: #e8efe8;
+}
+
+.measure-seg-label {
+  fill: #d8f0dc;
+}
+
+.measure-seg-label.is-preview {
+  fill: #9fd8aa;
+  opacity: 0.9;
+}
+
+.measure-total-label {
+  fill: var(--accent, #5ad26f);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.measure-vertex-label {
+  fill: var(--accent, #5ad26f);
+  font-size: 11px;
+}
+
+.btn[aria-pressed="true"] {
+  color: var(--accent, #5ad26f);
+  border-color: rgba(90, 210, 111, 0.55);
+  background: rgba(90, 210, 111, 0.12);
+}
+
+.measure-readout {
+  position: absolute;
+  left: 14px;
+  bottom: 52px;
+  z-index: 6;
+  width: min(320px, calc(100% - 28px));
+  max-height: 42vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong, #3a473c);
+  background: rgba(10, 14, 11, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text, #e8efe8);
+  font-size: 12px;
+}
+
+.measure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.measure-title {
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+.measure-total {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  color: var(--accent, #5ad26f);
+  font-weight: 700;
+}
+
+.measure-head .link-btn {
+  margin-left: auto;
+}
+
+.measure-head .link-btn ~ .link-btn {
+  margin-left: 0;
+}
+
+.measure-list {
+  margin: 8px 0 4px;
+  padding-left: 18px;
+  color: var(--muted, #93a394);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.measure-list:empty {
+  display: none;
+}
+
+.measure-list li.is-total {
+  color: var(--accent, #5ad26f);
+  font-weight: 700;
+  list-style: none;
+  margin-left: -18px;
+}
+
+.measure-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted, #93a394);
+}
+
+@media (max-width: 860px) {
+  .measure-readout {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    bottom: 44px;
+    max-height: 36vh;
+  }
+}
+
+/* 测距模式：标记不再拦截点击（否则点不到标记位置，也没法吸附）。
+   注意 .marker-pin / .marker-label 自己声明了 pointer-events:auto，
+   只写 .marker 拦不住子元素，必须一并禁用（和 .is-picking 同一套写法）。 */
+body.is-measuring .map-overlay .marker,
+body.is-measuring .map-overlay .marker-pin,
+body.is-measuring .map-overlay .marker-label {
+  pointer-events: none !important;
+}
+
+body.is-measuring .map-overlay .marker-popup {
+  pointer-events: auto;
+}
+
+body.is-measuring #viewport {
+  cursor: crosshair;
+}

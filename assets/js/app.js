@@ -13,6 +13,7 @@ import { loadConfig } from './config.js';
 import { createProjection } from './coords.js';
 import { MapView } from './viewer.js';
 import { MarkerLayer } from './markers.js';
+import { MeasureLayer, formatDistance } from './measure.js';
 import { Sidebar } from './sidebar.js';
 
 /* ============================== 小工具 ============================== */
@@ -45,6 +46,8 @@ const state = {
   imageSize: null,
   projection: null,
   calibration: null,
+  /** 测距模式开关 */
+  measureActive: false,
   labelMode: 'hover',
   grid: false,
   query: '',
@@ -88,6 +91,7 @@ async function bootstrap() {
     initViewer();
     initSidebar();
     initMarkers();
+    initMeasure();
 
     const hash = readHash();
     const startDim = hash.dim || config.defaultDimension;
@@ -182,6 +186,10 @@ function initViewer() {
     if (!focusOrigin({ animate: true })) gotoWorld(0, 0, { animate: true });
   });
   bindClick('btn-grid', toggleGrid);
+  bindClick('btn-measure', toggleMeasure);
+  bindClick('measure-undo', () => undoMeasurePoint());
+  bindClick('measure-clear', () => clearMeasure());
+  bindClick('measure-exit', () => setMeasureActive(false));
 
   // 首次交互后淡出操作提示
   const hint = $('map-hint');
@@ -203,6 +211,7 @@ const handleViewChange = (() => {
       raf = 0;
       const vs = viewState || safeViewState();
       tryCall(markers, 'update');
+      tryCall(measure, 'update', vs);
       updateZoomIndicator(vs);
       updateScaleBar(vs);
       drawGrid(vs);
@@ -225,6 +234,8 @@ function updateZoomIndicator(vs) {
 
 function handleMapClick(imagePoint) {
   if (!imagePoint) return;
+  // 测量模式：点一下加一个测量点，不触发路径点选中
+  if (handleMeasureClick(imagePoint)) return;
   // 点击空白处取消选中（弹窗由 markers 自己处理点击外部关闭）
   tryCall(markers, 'setSelected', null);
   tryCall(sidebar, 'setActiveWaypoint', null);
@@ -232,6 +243,11 @@ function handleMapClick(imagePoint) {
 }
 
 function handlePointerMove(imagePoint) {
+  if (measure && state.measureActive) {
+    const world = imagePoint && state.projection ? state.projection.imageToWorld(imagePoint.px, imagePoint.py) : null;
+    const snapped = imagePoint ? snapToWaypoint(imagePoint) : null;
+    tryCall(measure, 'setHover', snapped || (world && Number.isFinite(world.x) ? { x: world.x, z: world.z } : null));
+  }
   const el = $('coord-readout');
   if (!el) return;
   if (!state.config || state.config.ui.showCoords === false) {
@@ -382,6 +398,9 @@ async function applyDimension(dimensionId, opts = {}) {
   state.calibration = resolveCalibration(dim, state.imageSize);
   state.projection = buildProjection(state.calibration, state.imageSize);
   tryCall(view, 'setProjection', state.projection);
+  tryCall(measure, 'setProjection', state.projection);
+  tryCall(measure, 'clear');
+  updateMeasureReadout();
 
   // 视角：优先用 URL 深链，否则整图适配
   const hash = opts.hash || readHash();
@@ -494,6 +513,132 @@ function setAllGroupsVisible(visible) {
   pushDataToSidebar();
   toast(visible ? '已显示全部分组' : '已隐藏全部分组');
 }
+
+
+/* ============================== 测距 ============================== */
+
+/** @type {MeasureLayer|null} */
+let measure = null;
+
+function initMeasure() {
+  const overlay = $('overlay');
+  if (!overlay) return;
+  measure = new MeasureLayer(overlay);
+  tryCall(measure, 'setProjection', state.projection);
+}
+
+function isMeasureActive() {
+  return !!(measure && state.measureActive);
+}
+
+function setMeasureActive(active) {
+  if (!measure) return;
+  state.measureActive = !!active;
+  tryCall(measure, 'setActive', state.measureActive);
+  const btn = $('btn-measure');
+  if (btn) {
+    btn.setAttribute('aria-pressed', state.measureActive ? 'true' : 'false');
+    btn.classList.toggle('is-active', state.measureActive);
+  }
+  const panel = $('measure-readout');
+  if (panel) panel.hidden = !state.measureActive && measure.points.length === 0;
+  document.body.classList.toggle('is-measuring', state.measureActive);
+  if (state.measureActive) {
+    toast('测距已开启：点地图加测量点（点路径点会吸附）· Backspace 撤销 · Esc 退出');
+  }
+  updateMeasureReadout();
+}
+
+function toggleMeasure() {
+  setMeasureActive(!state.measureActive);
+}
+
+function clearMeasure() {
+  if (!measure) return;
+  tryCall(measure, 'clear');
+  updateMeasureReadout();
+}
+
+function undoMeasurePoint() {
+  if (!measure) return;
+  const removed = tryCall(measure, 'undo');
+  if (removed) toast('已撤销上一个测量点');
+  updateMeasureReadout();
+}
+
+/**
+ * 找最近的路径点并在 14 屏幕像素内吸附。
+ * 判定放在**图片像素**空间：tolPx = 14 / scale，这样不用再依赖 client 坐标，
+ * 缩放到任何级别行为都一致。
+ */
+function snapToWaypoint(imagePoint) {
+  const proj = state.projection;
+  if (!proj || !imagePoint) return null;
+  const vs = safeViewState();
+  const scale = vs && vs.scale > 0 ? vs.scale : 1;
+  const tolPx = 14 / scale;
+  let best = null;
+  let bestDist = tolPx;
+  const waypoints = state.dimension && Array.isArray(state.dimension.waypoints) ? state.dimension.waypoints : [];
+  for (const waypoint of waypoints) {
+    const img = proj.worldToImage(waypoint.x, waypoint.z);
+    if (!img || !Number.isFinite(img.px)) continue;
+    const dist = Math.hypot(img.px - imagePoint.px, img.py - imagePoint.py);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = { x: Number(waypoint.x), z: Number(waypoint.z), snapped: waypoint.name || waypoint.id || null };
+    }
+  }
+  if (best) return best;
+  const world = proj.imageToWorld ? proj.imageToWorld(imagePoint.px, imagePoint.py) : null;
+  return world && Number.isFinite(world.x) ? { x: world.x, z: world.z, snapped: null } : null;
+}
+
+/** 地图点击：测量模式下加一个测量点（不触发路径点选中） */
+function handleMeasureClick(imagePoint) {
+  if (!measure || !imagePoint) return false;
+  const point = snapToWaypoint(imagePoint);
+  // 调试用：记录最近一次测量点击（自动化测试与排查吸附问题会用）
+  window.__measureLastClick = { imagePoint: { px: imagePoint.px, py: imagePoint.py }, point, active: state.measureActive };
+  if (!point) return true;
+  const added = tryCall(measure, 'addPoint', point);
+  updateMeasureReadout();
+  if (added && added.segment > 0) {
+    toast(`本段 ${formatDistance(added.segment)} 格 · 总长 ${formatDistance(measure.total)} 格`, 2200);
+  } else if (point.snapped) {
+    toast(`起点已吸附到「${point.snapped}」`, 2000);
+  }
+  return true;
+}
+
+/** 读数面板：总长 + 每段距离 */
+function updateMeasureReadout() {
+  const panel = $('measure-readout');
+  const totalEl = $('measure-total');
+  const listEl = $('measure-list');
+  if (!measure || !panel || !totalEl) return;
+  const summary = measure.summary || { segments: [], total: 0, points: [] };
+  const hasPoints = summary.points.length > 0;
+  panel.hidden = !state.measureActive && !hasPoints;
+  totalEl.textContent = `${formatDistance(summary.total)} 格`;
+  if (listEl) {
+    listEl.textContent = '';
+    summary.segments.forEach((value, index) => {
+      const item = document.createElement('li');
+      const a = summary.points[index];
+      const b = summary.points[index + 1];
+      item.textContent = `第 ${index + 1} 段：${formatDistance(value)} 格　(${Math.round(a.x)}, ${Math.round(a.z)}) → (${Math.round(b.x)}, ${Math.round(b.z)})`;
+      listEl.appendChild(item);
+    });
+    if (summary.segments.length > 1) {
+      const totalItem = document.createElement('li');
+      totalItem.className = 'is-total';
+      totalItem.textContent = `合计 ${formatDistance(summary.total)} 格（${summary.segments.length} 段）`;
+      listEl.appendChild(totalItem);
+    }
+  }
+}
+
 
 /* ============================== 定位 ============================== */
 
@@ -993,11 +1138,23 @@ function bindClick(id, handler) {
 function bindGlobalKeys() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      const modal = $('calibrator');
-      if (modal && !modal.hidden) return; // 向导自己处理
+      if (isMeasureActive()) {
+        setMeasureActive(false);
+        return;
+      }
       tryCall(markers, 'setSelected', null);
       tryCall(sidebar, 'setActiveWaypoint', null);
       state.activeWaypointId = null;
+    }
+    if (e.key === 'Backspace' && isMeasureActive() && !isTyping(e.target)) {
+      e.preventDefault();
+      undoMeasurePoint();
+      return;
+    }
+    if ((e.key === 'Enter' || e.key === 'Return') && isMeasureActive() && !isTyping(e.target)) {
+      e.preventDefault();
+      setMeasureActive(false);
+      return;
     }
     if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) toggleGrid();
     if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) cycleLabelMode();
@@ -1047,4 +1204,18 @@ window.__mapApp = {
   cycleLabelMode,
   fitToContent,
   toast,
+  get measure() {
+    return measure;
+  },
+  measureSummary: () => (measure ? measure.summary : null),
+  toggleMeasure,
+  setMeasureActive,
+  clearMeasure,
+  undoMeasurePoint,
+  addMeasurePoint: (x, z) => {
+    if (!measure) return null;
+    const added = measure.addPoint({ x, z });
+    updateMeasureReadout();
+    return added;
+  },
 };
