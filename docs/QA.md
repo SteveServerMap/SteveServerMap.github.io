@@ -2,6 +2,20 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 侧栏分组折叠（2026-11-05）
+
+- 新能力：站点 `#waypoint-list` 按分组分区渲染（`section.wp-group`），分组头可折叠/展开；
+  眼睛按钮与 `#group-list` 分组面板联动；折叠状态按「维度::分组」持久化到 `localStorage`；搜索时强制展开。
+- 验证（无头 Edge，本地 1440×900）：分组分区渲染 ✓、点头部折叠（节点保留、视觉隐藏、aria-expanded=false）✓、
+  再点展开 ✓、刷新后保持 ✓、搜索强制展开 ✓、眼睛按钮与分组面板联动 ✓（6/6）。
+- `data.config` 检查同步改为「分组分区 + 组内顺序」校验（原为全局扁平顺序，与分组渲染冲突）。
+- ⚠️ 现存失败（**改动前就存在**，与本次无关）：`pos.zoom`、`pos.drag`、`cal.crop-change`、`sidebar.search`、`deep-link`。
+  它们依赖示例配置里的 `castle` / `农场` 名称，以及「路径点分散在全图」的分布；站点 `config.json` 现在是用户自己的
+  15 个点（聚集在一小片区域，下界/末地为 0 个），所以断言不成立。修复方式：这几个用例改成从 `config.json`
+  动态取样本（名称、分组、坐标），不要写死示例数据。
+
+
+
 测试**零 npm 依赖**：只使用 Node 24 内置的 `WebSocket` / `fetch` / `node:http` / `node:child_process` / `node:fs`，
 直接驱动 Microsoft Edge（或 Chrome）的 DevTools 协议。
 
