@@ -455,7 +455,7 @@ async function applyDimension(dimensionId, opts = {}) {
         ? `找不到瓦片清单：${dim.tiles.manifest}`
         : (dim.image ? `找不到基底图片：${dim.image}` : '该维度没有配置 image 字段'),
       hint: dim.tiles
-        ? '确认 tiles/manifest.json 与 tiles/tiles/<level>/<x>_<y>.png 都已发布到站点。'
+        ? `确认 ${dim.tiles.manifest} 与同目录的 tiles/<level>/<x>_<y>.png 都已发布到站点。`
         : '把导出的地图图片按这个文件名放到站点根目录即可；路径点会按世界坐标自动落位。',
     });
     updateFooterStatus();

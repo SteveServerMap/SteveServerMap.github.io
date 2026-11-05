@@ -52,7 +52,8 @@ const WAIT = {
  * 浏览器会为每个 404 记一条 network / log 错误。这类错误必须放行，
  * 否则 run.console 会被它们刷屏（契约 §10：瓦片 404 静默忽略）。
  */
-const TILE_404_PATTERN = /\/tiles\/tiles\/\d+\/\d+_\d+\.png(?:[?#].*)?$/i;
+// 兼容根清单 tiles/tiles/… 与按维度分目录 tiles/<dim>/tiles/… 两种布局。
+const TILE_404_PATTERN = /\/tiles\/(?:[^/]+\/)?tiles\/\d+\/\d+_\d+\.png(?:[?#].*)?$/i;
 const isExpectedTileMiss = (error) =>
   /404/.test(String(error?.text || '')) &&
   TILE_404_PATTERN.test(String(error?.where || ''));
@@ -569,6 +570,61 @@ async function findSafeMapPoint(
     },
     viewport,
     fractions,
+    IGNORED_HIT_SELECTOR,
+  );
+}
+
+/**
+ * 在某个标记附近找一个命中底图的安全落点。
+ * 缩放 / 拖拽测试用它作为起点，保证操作后至少有一个标记仍在视口内可校验。
+ */
+async function findSafePointNearMarker(viewport) {
+  const anchor = await page.evalFn(
+    (vp) => {
+      const margin = 40;
+      for (const el of document.querySelectorAll('.marker')) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        if (cx < vp.left + margin || cx > vp.left + vp.width - margin) continue;
+        if (cy < vp.top + margin || cy > vp.top + vp.height - margin) continue;
+        return { x: cx, y: cy };
+      }
+      return null;
+    },
+    viewport,
+  );
+  if (!anchor) return null;
+  const offsets = [
+    [26, 26],
+    [-26, 26],
+    [26, -26],
+    [-26, -26],
+    [40, 0],
+    [0, 40],
+    [-40, 0],
+    [0, -40],
+    [56, 56],
+    [-56, 56],
+  ];
+  return page.evalFn(
+    (vp, base, offs, ignored) => {
+      for (const [dx, dy] of offs) {
+        const x = Math.round(base.x + dx);
+        const y = Math.round(base.y + dy);
+        if (x < vp.left + 2 || x > vp.left + vp.width - 2) continue;
+        if (y < vp.top + 2 || y > vp.top + vp.height - 2) continue;
+        const el = document.elementFromPoint(x, y);
+        if (!el || el.closest(ignored)) continue;
+        if (el.id !== 'map-image' && el.id !== 'map-canvas') continue;
+        return { x, y, hit: { tag: el.tagName, id: el.id, cls: String(el.className || '') } };
+      }
+      return null;
+    },
+    viewport,
+    anchor,
+    offsets,
     IGNORED_HIT_SELECTOR,
   );
 }
@@ -1293,7 +1349,8 @@ async function main() {
     const viewport = before.info.viewport;
     if (!viewport) throw new Error('找不到 #viewport');
     // 落点必须真正命中底图元素：标记 / 详情弹窗 / 缩放面板上的滚轮会被 viewer 有意忽略
-    const point = await findSafeMapPoint(viewport);
+    // 优先在标记附近缩放：避免缩放后整屏都是未探索海域、没有任何标记可校验。
+    const point = (await findSafePointNearMarker(viewport)) || (await findSafeMapPoint(viewport));
     if (!point) {
       throw new Error(
         '视口内找不到命中底图的落点（被标记 / 弹窗 / 浮层完全覆盖）；' +
@@ -1343,14 +1400,16 @@ async function main() {
     const before = ctx.lastPositions ?? (await measurePositions(dimension));
     const viewport = before.info.viewport;
     if (!viewport) throw new Error('找不到 #viewport');
-    const start = await findSafeMapPoint(viewport, [
-      [0.2, 0.25],
-      [0.25, 0.3],
-      [0.3, 0.35],
-      [0.5, 0.3],
-      [0.35, 0.5],
-      [0.5, 0.5],
-    ]);
+    const start =
+      (await findSafePointNearMarker(viewport)) ||
+      (await findSafeMapPoint(viewport, [
+        [0.2, 0.25],
+        [0.25, 0.3],
+        [0.3, 0.35],
+        [0.5, 0.3],
+        [0.35, 0.5],
+        [0.5, 0.5],
+      ]));
     if (!start) throw new Error('视口内找不到可拖拽的地图落点（全被标记/浮层覆盖）');
     const end = { x: start.x + 160, y: start.y + 110 };
     await page.drag({ from: start, to: end, steps: 12 });
@@ -1687,7 +1746,7 @@ async function main() {
 
   await checkIfReady(
     'cal.crop-change',
-    '画幅变化后重新校准：标记自动对回（用新 calibration 手算，误差 < 1.5px）',
+    '单图模式画幅变化后重新校准：标记自动对回（用新 calibration 手算，误差 < 1.5px）',
     async () => {
       const dimension = dimensionById('overworld');
       await resetView();
@@ -1701,6 +1760,20 @@ async function main() {
       if (!original) {
         throw new Error('读取 window.__mapApp.state.calibration 失败（app.js 未暴露 __mapApp 调试接口）');
       }
+      // 校准只对单图模式生效（瓦片维度的世界范围来自 manifest）。
+      // 临时加一个复用主世界图片与路径点的单图维度，专门验证重新校准后的重投影。
+      const imageDim = {
+        ...dimension,
+        id: 'test-image-cal',
+        name: '校准测试',
+        tiles: undefined,
+        calibration: original,
+      };
+      await page.evalFn((dim) => {
+        window.__mapApp.state.config.dimensions.push(dim);
+      }, imageDim);
+      await page.evalFn((id) => window.__mapApp.applyDimension(id), imageDim.id);
+      await page.settle(420);
       // 模拟「重新导出地图」：画幅放大 1.5 倍并平移（X +200 / Z -150）
       const centerX = (original.xMin + original.xMax) / 2;
       const centerZ = (original.zMin + original.zMax) / 2;
@@ -1714,8 +1787,18 @@ async function main() {
         flipZ: original.flipZ,
         calibrated: true,
       };
+      // 不依赖固定的 castle 示例点：用 config 里第一个坐标有效的路径点。
+      const targetWaypoint =
+        dimension.waypoints.find((waypoint) => waypoint.id === 'castle') ||
+        dimension.waypoints.find(
+          (waypoint) => Number.isFinite(waypoint.x) && Number.isFinite(waypoint.z),
+        ) ||
+        dimension.waypoints[0];
+      if (!targetWaypoint) throw new Error('config 主世界没有可用的路径点，无法测试重新校准');
+      const targetId = targetWaypoint.id;
+      const targetName = targetWaypoint.name || targetId;
       const beforeMarkers = await page.evalFn(MARKER_RECTS);
-      const beforeCastle = beforeMarkers.find((marker) => marker.id === 'castle');
+      const beforeTarget = beforeMarkers.find((marker) => marker.id === targetId);
       let markerMove = 0;
       let positionReport = null;
       try {
@@ -1732,19 +1815,19 @@ async function main() {
         await page.settle(280);
 
         const afterMarkers = await page.evalFn(MARKER_RECTS);
-        const afterCastle = afterMarkers.find((marker) => marker.id === 'castle');
-        if (beforeCastle && afterCastle) {
+        const afterTarget = afterMarkers.find((marker) => marker.id === targetId);
+        if (beforeTarget && afterTarget) {
           markerMove = Math.hypot(
-            afterCastle.rect.left - beforeCastle.rect.left,
-            afterCastle.rect.top - beforeCastle.rect.top,
+            afterTarget.rect.left - beforeTarget.rect.left,
+            afterTarget.rect.top - beforeTarget.rect.top,
           );
         }
         if (!(markerMove > 5)) {
           throw new Error(
-            `applyCalibration 后标记几乎没移动（castle 位移 ${markerMove.toFixed(1)}px，期望 > 5px），校准可能未生效`,
+            `applyCalibration 后标记几乎没移动（${targetName} 位移 ${markerMove.toFixed(1)}px，期望 > 5px），校准可能未生效`,
           );
         }
-        positionReport = await measurePositions({ ...dimension, calibration: changed });
+        positionReport = await measurePositions({ ...imageDim, calibration: changed });
         assertPositions(positionReport, { minChecked: 3, phase: '应用新画幅后' });
       } finally {
         await page
@@ -1758,11 +1841,19 @@ async function main() {
           })
           .catch(() => {});
         await page.settle(220);
+        // 清理临时维度并切回正式的主世界
+        await page.evalFn((id) => {
+          const list = window.__mapApp.state.config.dimensions;
+          const index = list.findIndex((item) => item.id === id);
+          if (index >= 0) list.splice(index, 1);
+        }, imageDim.id);
+        await page.evalFn(() => window.__mapApp.applyDimension('overworld'));
+        await page.settle(320);
         await resetView();
       }
       return (
-        `新画幅 X[${changed.xMin.toFixed(0)}, ${changed.xMax.toFixed(0)}] Z[${changed.zMin.toFixed(0)}, ${changed.zMax.toFixed(0)}]，` +
-        `castle 位移 ${markerMove.toFixed(0)}px；${summarizePositions(positionReport)}`
+        `单图模式新画幅 X[${changed.xMin.toFixed(0)}, ${changed.xMax.toFixed(0)}] Z[${changed.zMin.toFixed(0)}, ${changed.zMax.toFixed(0)}]，` +
+        `${targetName} 位移 ${markerMove.toFixed(0)}px；${summarizePositions(positionReport)}`
       );
     },
   );
@@ -1776,9 +1867,20 @@ async function main() {
     if (!before) throw new Error('找不到 #waypoint-list');
     if (before.count !== total) throw new Error(`搜索前列表项 ${before.count}，期望 ${total}`);
 
-    const query = '农场';
-    const expectedMatches = dimension.waypoints.filter((waypoint) => waypoint.name.includes(query)).length;
-    if (expectedMatches === 0) throw new Error(`测试数据里没有名称包含「${query}」的路径点`);
+    // 从 config 里挑一个能过滤出部分结果的名称，不依赖固定的示例数据。
+    let query = '';
+    let expectedMatches = 0;
+    for (const waypoint of dimension.waypoints) {
+      const name = String(waypoint.name || '').trim();
+      if (!name) continue;
+      const matches = dimension.waypoints.filter((item) => String(item.name || '').includes(name)).length;
+      if (matches > 0 && matches < total) {
+        query = name;
+        expectedMatches = matches;
+        break;
+      }
+    }
+    if (!query) throw new Error('config 里找不到可用于搜索测试的路径点名称');
 
     if (!(await page.evalFn(SET_INPUT, '#waypoint-search', query))) {
       throw new Error('找不到搜索框 #waypoint-search');
@@ -2057,8 +2159,13 @@ async function main() {
   /* ---------------- 5c. URL 深链 ---------------- */
   await checkIfReady('deep-link', 'URL 深链：#dim/x/z/s 随视图同步，新标签页按 hash 还原视角且无 console error', async () => {
     const dimension = dimensionById('overworld');
-    const castle = dimension.waypoints.find((waypoint) => waypoint.id === 'castle');
-    if (!castle) throw new Error('config 主世界缺少 castle 路径点，无法测试深链');
+    // 不依赖固定的 castle 示例点：用 config 里第一个坐标有效的路径点。
+    const castle =
+      dimension.waypoints.find((waypoint) => waypoint.id === 'castle') ||
+      dimension.waypoints.find(
+        (waypoint) => Number.isFinite(waypoint.x) && Number.isFinite(waypoint.z),
+      );
+    if (!castle) throw new Error('config 主世界没有坐标有效的路径点，无法测试深链');
 
     await page.setViewport({ ...VIEWPORT });
     await page.settle(220);

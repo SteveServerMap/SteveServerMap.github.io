@@ -53,7 +53,7 @@
             "properties": {
               "manifest": {
                 "type": "string",
-                "description": "瓦片清单路径，相对站点根目录，如 tiles/manifest.json；瓦片文件按 <manifest 目录>/tiles/<level>/<x>_<y>.png 读取"
+                "description": "瓦片清单路径，相对站点根目录，如 tiles/overworld/manifest.json；瓦片文件按 <manifest 目录>/tiles/<level>/<x>_<y>.png 读取"
               }
             },
             "required": ["manifest"]

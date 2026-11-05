@@ -42,7 +42,7 @@ export const MAX_MISSING_TILES = 4096;
 export const MAX_CANVAS_PIXELS = 24_000_000;
 
 const DEFAULT_TILE_SIZE = 256;
-const DEFAULT_MANIFEST = 'tiles/manifest.json';
+const DEFAULT_MANIFEST = 'tiles/overworld/manifest.json';
 
 /* -------------------------------------------------------------------------- */
 /* 小工具                                                                      */
@@ -62,7 +62,7 @@ function toNum(v) {
   return NaN;
 }
 
-/** manifest 路径 → 瓦片根目录：'tiles/manifest.json' → 'tiles/tiles/' */
+/** manifest 路径 → 瓦片根目录：'tiles/overworld/manifest.json' → 'tiles/overworld/tiles/' */
 export function tileBaseFromManifest(manifestUrl = DEFAULT_MANIFEST) {
   const url = String(manifestUrl || DEFAULT_MANIFEST);
   const dir = url.includes('/') ? url.slice(0, url.lastIndexOf('/') + 1) : '';

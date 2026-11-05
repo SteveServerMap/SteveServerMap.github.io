@@ -18,7 +18,7 @@
       "name": "主世界",
       "image": "主世界.png",
       "tiles": {
-        "manifest": "tiles/manifest.json"
+        "manifest": "tiles/overworld/manifest.json"
       },
       "calibration": {
         "calibrated": true,
@@ -27,7 +27,7 @@
         "zMin": -3584,
         "zMax": 1536,
         "flipZ": false,
-        "note": "使用瓦片底图：世界范围以 tiles/manifest.json 的 worldBlockRange 为准（1 像素 = 1 方块）；image 仅在瓦片加载失败时兜底"
+        "note": "使用瓦片底图：世界范围以 tiles/overworld/manifest.json 的 worldBlockRange 为准（1 像素 = 1 方块）；image 仅在瓦片加载失败时兜底"
       },
       "groups": [
         {

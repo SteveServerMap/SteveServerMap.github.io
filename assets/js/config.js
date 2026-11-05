@@ -161,8 +161,8 @@ function normalizeDimension(rawDim, index, warnings) {
 /**
  * 瓦片底图配置的规范化。
  * 支持两种写法：
- *   "tiles": { "manifest": "tiles/manifest.json" }
- *   "tiles": "tiles/manifest.json"
+ *   "tiles": { "manifest": "tiles/overworld/manifest.json" }
+ *   "tiles": "tiles/overworld/manifest.json"
  * 没有 manifest 字段 → 视为没配置（继续走单张 image）。
  */
 function normalizeTiles(raw, warnings, dimName) {

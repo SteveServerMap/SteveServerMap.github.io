@@ -258,10 +258,10 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 地图很大时，一张 PNG 可能有几十 MB，首屏要等很久。这时可以把地图切成瓦片：页面按当前缩放自动挑层级，只下载视口里那几张。
 
 ```json
-"tiles": { "manifest": "tiles/manifest.json" }
+"tiles": { "manifest": "tiles/overworld/manifest.json" }
 ```
 
-也可以直接写成字符串：`"tiles": "tiles/manifest.json"`。
+也可以直接写成字符串：`"tiles": "tiles/overworld/manifest.json"`。
 
 `manifest.json` 的结构（由导出工具生成，一般不用手改）：
 
@@ -462,11 +462,13 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 | 维度 | 底图 | 说明 |
 | --- | --- | --- |
-| 主世界 | `tiles/manifest.json` + `tiles/tiles/<level>/<x>_<y>.png` | 瓦片底图；`主世界.png`（3584×5120）只在 manifest 加载失败时兜底 |
+| 主世界 | `tiles/overworld/manifest.json` + `tiles/overworld/tiles/<level>/<x>_<y>.png` | 瓦片底图；`主世界.png`（3584×5120）只在 manifest 加载失败时兜底 |
 | 下界 | `下界.png` | **占位图**，请替换成真实导出图 |
 | 末地 | `末地.png` | **占位图**，请替换成真实导出图 |
 
-换瓦片地图：把新的 `manifest.json` 与 `tiles/` 目录整体覆盖，确认 `config.json` 里该维度的 `"tiles": { "manifest": "tiles/manifest.json" }` 不变即可 —— 瓦片自带世界范围，**不需要再校准**（路径点会按新 manifest 的 `worldBlockRange` 自动对回）。
+换瓦片地图：把新的 `manifest.json` 与同目录的 `tiles/` 整体覆盖 `tiles/overworld/`，确认 `config.json` 里该维度的 `"tiles": { "manifest": "tiles/overworld/manifest.json" }` 不变即可 —— 瓦片自带世界范围，**不需要再校准**（路径点会按新 manifest 的 `worldBlockRange` 自动对回）。
+
+> 当前瓦片由配置工具（`SteveServerMapConfig`）的「XAERO 瓦片源」生成：把导出图放进 `xaero/<维度名>/`，在工具里一键生成并保存即可，详见该仓库的 `docs/XAERO.md`。
 
 两种换法，任选其一：
 
@@ -558,7 +560,7 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 **Q：地图区提示「地图还没上传」/ 图片 404。**
 按顺序检查：① 文件名和 `config.json` 里的 `image` 是否**完全一致**（含扩展名、大小写）；② 图片是否在站点根目录（或 `image` 里写的相对路径是否正确）；③ 浏览器开发者工具 Network 面板看该图片请求是不是 404；④ 图片本身有没有损坏（能双击打开吗）。
 
-**Q：Network 里一堆 `tiles/tiles/<level>/<x>_<y>.png` 是 404，是坏了吗？**
+**Q：Network 里一堆 `tiles/<维度>/tiles/<level>/<x>_<y>.png` 是 404，是坏了吗？**
 不是。瓦片导出时**全透明的瓦片不会落地**，所以编号不连续是常态。页面会静默跳过缺的瓦片（显示为透明背景），不影响路径点、测距和搜索。只要不是整屏空白就不用管。
 
 **Q：瓦片地图打开后某些区域是空的。**

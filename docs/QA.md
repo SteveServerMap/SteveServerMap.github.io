@@ -19,7 +19,7 @@
 
 - 新增 `assets/js/tiles.js`（manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存）。`config.json` 里配了 `tiles` 的维度走瓦片，
   没配的维度保持原来的「单张 PNG + `calibration`」，一行未改。
-- 主世界切到瓦片：世界范围取 `tiles/manifest.json` 的 `worldBlockRange` = X[-2048, 2048]、Z[-3584, 1536]，1 像素 = 1 方块。
+- 主世界切到瓦片：世界范围取 `tiles/overworld/manifest.json` 的 `worldBlockRange` = X[-2048, 2048]、Z[-3584, 1536]，1 像素 = 1 方块。
   与原 calibration（`xMin=-2048.5 / zMin=-3584.375`）的像素对齐差是常量 `(0.5, 0.375)`，
   **15 个路径点的像素位置最大偏移 0.625 px**（所有点相同），远小于 2 px 阈值；像素对齐差异只影响 `focusOrigin` 的取整。
 - 底图元素：瓦片维度用 `<canvas id="map-canvas">`，与 `<img id="map-image">` 共用同一套定位 / 变换语义

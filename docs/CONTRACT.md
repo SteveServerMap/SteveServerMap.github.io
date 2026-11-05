@@ -8,7 +8,7 @@ index.html                 页面骨架（Lead 拥有，其他人不要修改）
 config.json                用户配置文件（Lead 拥有）
 config.schema.json         配置的 JSON Schema（Lead 拥有）
 主世界.png / 下界.png / 末地.png  基底图片（单张模式；配了 tiles 的维度只作兜底）
-tiles/manifest.json + tiles/tiles/<level>/<x>_<y>.png  瓦片底图（见 §10）
+tiles/<dim>/manifest.json + tiles/<dim>/tiles/<level>/<x>_<y>.png  瓦片底图（见 §10）
 assets/css/style.css       style-dev 拥有
 assets/js/config.js        config/normalize（Lead 拥有）
 assets/js/coords.js        viewer-dev 拥有（纯函数，无 DOM）
@@ -324,7 +324,7 @@ export class MeasureLayer {
       "id": "overworld",
       "name": "主世界",
       "image": "主世界.png",              // 单张模式用；配了 tiles 时只作兜底
-      "tiles": { "manifest": "tiles/manifest.json" },   // 可选，见 §10
+      "tiles": { "manifest": "tiles/overworld/manifest.json" },   // 可选，见 §10
       "calibration": { "calibrated": false, "xMin": -1792, "xMax": 1792, "zMin": -2560, "zMax": 2560, "note": "…" },
       "groups": [
         { "id": "base", "name": "据点", "color": "#5ad26f", "visible": true }
@@ -340,7 +340,7 @@ export class MeasureLayer {
 ```
 
 - 规范化后的维度对象：`{ id, name, image, tiles, calibration, groups, waypoints, order }`
-  - `tiles` 为 `null`（未配置）或 `{ manifest: "tiles/manifest.json" }`（也接受直接写字符串）。
+  - `tiles` 为 `null`（未配置）或 `{ manifest: "tiles/overworld/manifest.json" }`（也接受直接写字符串）。
 - 规范化后的路径点：`{ id, name, x, y, z, group, icon, color, label, description, url }`
   - `y` 可省略（null）；`group` 缺省落到 `default` 分组；`icon` 缺省 `pin`；`color` 缺省取分组色。
 - `label`：`always` | `hover` | `never`（缺省跟随全局 `ui.labelMode`）。
@@ -399,7 +399,7 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 ### 10.1 配置与 manifest
 
 ```jsonc
-"tiles": { "manifest": "tiles/manifest.json" }   // 也接受 "tiles": "tiles/manifest.json"
+"tiles": { "manifest": "tiles/overworld/manifest.json" }   // 也接受 "tiles": "tiles/overworld/manifest.json"
 ```
 
 瓦片 URL 由 manifest 位置推导：`<manifest 所在目录>/tiles/<level>/<x>_<y>.png`。
@@ -460,7 +460,7 @@ document.body.dataset.base   // 'tiles' | 'image' | 'empty'
 - `tests/smoke.mjs` 的 `tiles.render` / `tiles.levels` 两项覆盖「canvas 出图 + 世界范围来自 manifest」
   与「层级随缩放切换 + 视口裁剪」。
 - 命中 `#map-image` 的旧断言已改为「当前底图元素」`#map-image:not([hidden]), #map-canvas:not([hidden])`。
-- 缺瓦片的 404 由 `createDiagnostics(page, { ignore })` 放行（`/tiles/tiles/<l>/<x>_<y>.png` 的 404 不算错误），
+- 缺瓦片的 404 由 `createDiagnostics(page, { ignore })` 放行（`/tiles/<dim>/tiles/<l>/<x>_<y>.png` 的 404 不算错误），
   否则 `run.console` 会被正常的缺瓦片刷满。
 - **限制**：瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（会 toast 提示并忽略）；
   `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
