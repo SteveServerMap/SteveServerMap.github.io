@@ -121,6 +121,8 @@
            aria-label="地图视图，可拖拽平移、滚轮缩放">
         <div id="stage" class="map-stage">
           <img id="map-image" class="map-image" alt="地图基底图片" draggable="false" decoding="async">
+          <!-- 瓦片底图：与 <img> 二选一显示，CSS 尺寸 / 变换语义完全一致（见 assets/js/tiles.js） -->
+          <canvas id="map-canvas" class="map-image map-canvas" aria-label="瓦片底图" hidden></canvas>
         </div>
 
         <!-- 屏幕坐标系覆盖层：标记 / 网格 / 准星 / 弹窗 -->

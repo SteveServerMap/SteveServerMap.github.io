@@ -47,6 +47,16 @@ const WAIT = {
   long: Math.round(20000 * timeoutScale),
 };
 
+/**
+ * 瓦片底图里「文件不存在」是正常情况（导出时全透明的瓦片不落地），
+ * 浏览器会为每个 404 记一条 network / log 错误。这类错误必须放行，
+ * 否则 run.console 会被它们刷屏（契约 §10：瓦片 404 静默忽略）。
+ */
+const TILE_404_PATTERN = /\/tiles\/tiles\/\d+\/\d+_\d+\.png(?:[?#].*)?$/i;
+const isExpectedTileMiss = (error) =>
+  /404/.test(String(error?.text || '')) &&
+  TILE_404_PATTERN.test(String(error?.where || ''));
+
 const rep = createReporter('smoke');
 let server = null;
 let browser = null;
@@ -106,18 +116,31 @@ const INIT_SCRIPT = `
 })();
 `;
 
+/**
+ * 读取「当前底图元素」的几何信息。
+ * 单张图片维度是 <img id="map-image">，瓦片维度是 <canvas id="map-canvas">：
+ * 两者的 CSS 尺寸 / 变换语义一致，所以 rect / naturalWidth 的用法对两边都成立
+ * （canvas 的逻辑尺寸写在 data-image-width/height 上，因为它的 width 属性是随层级变化的位图尺寸）。
+ */
 function IMAGE_INFO() {
   const img = document.querySelector('#map-image');
+  const canvas = document.querySelector('#map-canvas');
+  const el = canvas && !canvas.hidden ? canvas : img;
   const viewport = document.querySelector('#viewport');
-  if (!img) return null;
-  const rect = img.getBoundingClientRect();
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
   const viewRect = viewport ? viewport.getBoundingClientRect() : null;
   const stage = document.querySelector('#stage');
+  const isCanvas = el.tagName === 'CANVAS';
+  const naturalWidth = isCanvas ? Number(el.dataset.imageWidth || 0) : el.naturalWidth;
+  const naturalHeight = isCanvas ? Number(el.dataset.imageHeight || 0) : el.naturalHeight;
   return {
-    naturalWidth: img.naturalWidth,
-    naturalHeight: img.naturalHeight,
-    complete: img.complete,
-    src: img.currentSrc || img.src,
+    kind: isCanvas ? 'tiles' : 'image',
+    id: el.id,
+    naturalWidth,
+    naturalHeight,
+    complete: isCanvas ? naturalWidth > 0 : el.complete,
+    src: isCanvas ? String(el.dataset.manifest || '') : String(el.currentSrc || el.src || ''),
     rect: {
       left: rect.left,
       top: rect.top,
@@ -280,6 +303,9 @@ function LAYOUT() {
 function DIMENSION_STATE() {
   const buttons = [...document.querySelectorAll('#dimension-switch button, #dimension-switch [role="tab"]')];
   const img = document.querySelector('#map-image');
+  const canvas = document.querySelector('#map-canvas');
+  const layer = canvas && !canvas.hidden ? canvas : img;
+  const isCanvas = Boolean(layer) && layer.tagName === 'CANVAS';
   return {
     bodyDimension: document.body.dataset.dimension ?? null,
     buttons: buttons.map((button) => ({
@@ -291,8 +317,12 @@ function DIMENSION_STATE() {
         button.getAttribute('aria-pressed') === 'true' ||
         button.classList.contains('is-active'),
     })),
-    imageSrc: img ? img.currentSrc || img.src : null,
-    imageNaturalWidth: img ? img.naturalWidth : 0,
+    baseLayer: document.body.dataset.base ?? null,
+    layerKind: isCanvas ? 'tiles' : 'image',
+    imageSrc: layer ? (isCanvas ? String(layer.dataset.manifest || '') : layer.currentSrc || layer.src) : null,
+    imageNaturalWidth: layer
+      ? (isCanvas ? Number(layer.dataset.imageWidth || 0) : layer.naturalWidth)
+      : 0,
     markerCount: document.querySelectorAll('#overlay .marker').length,
     markerIds: [...document.querySelectorAll('#overlay .marker')].map((el) => el.dataset.id || null),
   };
@@ -386,9 +416,12 @@ async function errorSnapshot() {
 function flattenErrors(snapshot) {
   const items = [];
   for (const error of snapshot.cdp) {
+    if (isExpectedTileMiss(error)) continue;
     items.push(`[${error.kind}] ${truncate(error.text, 300)}${error.where ? ` @ ${truncate(error.where, 200)}` : ''}`);
   }
   for (const error of snapshot.injected) {
+    // <img> 的 error 事件会被 window 的捕获阶段监听器看到，缺瓦片同理，一并放行
+    if (isExpectedTileMiss({ text: error.message, where: error.source })) continue;
     items.push(`[${error.kind}] ${truncate(error.message, 300)}${error.source ? ` @ ${error.source}:${error.line}` : ''}`);
   }
   for (const error of snapshot.unhandled) {
@@ -502,8 +535,8 @@ const IGNORED_HIT_SELECTOR =
   '.marker, .marker-popup, .zoom-panel, .coord-readout, .map-hint, .scale-bar, .map-state, .modal';
 
 /**
- * 在视口内找一个安全的落点：elementFromPoint 必须真正命中 #map-image
- * （而不是标记 / 弹窗 / 缩放面板 / 地图状态层）。
+ * 在视口内找一个安全的落点：elementFromPoint 必须真正命中底图元素
+ * （#map-image 单张图片 / #map-canvas 瓦片，而不是标记 / 弹窗 / 缩放面板 / 地图状态层）。
  */
 async function findSafeMapPoint(
   viewport,
@@ -529,7 +562,7 @@ async function findSafeMapPoint(
         const el = document.elementFromPoint(x, y);
         if (!el) continue;
         if (el.closest(ignored)) continue;
-        if (el.id !== 'map-image') continue;
+        if (el.id !== 'map-image' && el.id !== 'map-canvas') continue;
         return { x, y, hit: { tag: el.tagName, id: el.id, cls: String(el.className || '') } };
       }
       return null;
@@ -567,17 +600,18 @@ async function viewScale() {
   );
 }
 
-/** 刷新 / 切换后等待应用就绪（维度按钮 + 基底图 + 标记都就位） */
+/** 刷新 / 切换后等待应用就绪（维度按钮 + 底图（img 或 canvas）+ 标记都就位） */
 async function waitForAppReady(label = '应用就绪') {
   return page.waitFor(
     () => {
       const buttons = document.querySelectorAll('#dimension-switch button, #dimension-switch [role="tab"]');
-      const image = document.querySelector('#map-image');
+      const layer = document.querySelector('#map-canvas:not([hidden]), #map-image:not([hidden])');
       const markers = document.querySelectorAll('#overlay .marker');
-      if (buttons.length < 3 || !image || !image.complete || image.naturalWidth <= 0 || markers.length === 0) {
-        return null;
-      }
-      return { buttons: buttons.length, markers: markers.length, imageWidth: image.naturalWidth };
+      if (buttons.length < 3 || !layer || markers.length === 0) return null;
+      const isCanvas = layer.tagName === 'CANVAS';
+      const width = isCanvas ? Number(layer.dataset.imageWidth || 0) : layer.naturalWidth;
+      if (!(width > 0)) return null;
+      return { buttons: buttons.length, markers: markers.length, imageWidth: width };
     },
     { timeout: WAIT.long, interval: 120, label },
   );
@@ -613,14 +647,14 @@ async function readAppCalibration() {
 }
 
 /**
- * 按「图片相对位置」找一个真正命中 #map-image 的点并点击。
+ * 按「底图相对位置」找一个真正命中底图元素（img / canvas）的点并点击。
  * 拾取模式下弹窗应让开（pointer-events:none），命中标记 / 提示条的点会被跳过。
  */
 async function clickImageFraction(fractions, { label = '地图落点' } = {}) {
   for (const [fx, fy] of fractions) {
     const point = await page.evalFn(
       (fxv, fyv) => {
-        const img = document.querySelector('#map-image');
+        const img = document.querySelector('#map-canvas:not([hidden]), #map-image:not([hidden])');
         if (!img) return null;
         const rect = img.getBoundingClientRect();
         const x = Math.round(rect.left + rect.width * fxv);
@@ -635,14 +669,14 @@ async function clickImageFraction(fractions, { label = '地图落点' } = {}) {
       fx,
       fy,
     );
-    if (!point) throw new Error('找不到 #map-image，无法在图片上取点');
-    if (point.hit?.id !== 'map-image') continue;
+    if (!point) throw new Error('找不到底图元素，无法在地图上取点');
+    if (point.hit?.id !== 'map-image' && point.hit?.id !== 'map-canvas') continue;
     await page.click(point.x, point.y);
     await page.settle(160);
     return point;
   }
   throw new Error(
-    `在图片上找不到命中 #map-image 的点击位置（${label}，尝试了 ${fractions.length} 个候选；` +
+    `在地图上找不到命中底图的点击位置（${label}，尝试了 ${fractions.length} 个候选；` +
       `可能是遮罩未让开或标记覆盖）`,
   );
 }
@@ -766,18 +800,21 @@ async function switchDimension(dimensionId) {
   }
   await page.click(target.x, target.y);
   const expectedMarkers = dimension.waypoints.length;
-  const expectedFile = dimension.image;
+  // 瓦片维度没有基底图片，底图来源是 manifest；单张图片维度仍然是 image
+  const expectedTiles = Boolean(dimension.tiles && dimension.tiles.manifest);
+  const expectedFile = expectedTiles ? dimension.tiles.manifest : dimension.image;
   let observed = null;
   try {
     await waitUntil(
       async () => {
         observed = await page.evalFn(DIMENSION_STATE);
         const srcDecoded = observed.imageSrc ? decodeURIComponent(observed.imageSrc) : '';
-        // 必须「全部」满足：body 维度已切换、基底图 src 是这张图、图片已真正解码（naturalWidth>0）、
+        // 必须「全部」满足：body 维度已切换、底图来源正确、底图已就绪（naturalWidth>0）、
         // 标记数已按新维度重建。原来用 || 只要 body[data-dimension] 一变就返回，
         // 在真实网络（GitHub Pages）上图片还没下载完就断言 naturalWidth，会出现假失败。
         return (
           observed.bodyDimension === dimension.id &&
+          observed.layerKind === (expectedTiles ? 'tiles' : 'image') &&
           srcDecoded.includes(expectedFile) &&
           observed.imageNaturalWidth > 0 &&
           observed.markerCount === expectedMarkers
@@ -805,26 +842,34 @@ async function switchDimension(dimensionId) {
   return { target, state: observed };
 }
 
-async function waitForImageLoaded(label = '#map-image 加载完成') {
+async function waitForImageLoaded(label = '底图加载完成') {
   return page.waitFor(
     () => {
-      const img = document.querySelector('#map-image');
-      if (!img || !img.complete || img.naturalWidth <= 0) return null;
-      return { naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, src: img.currentSrc || img.src };
+      const layer = document.querySelector('#map-canvas:not([hidden]), #map-image:not([hidden])');
+      if (!layer) return null;
+      const isCanvas = layer.tagName === 'CANVAS';
+      const naturalWidth = isCanvas ? Number(layer.dataset.imageWidth || 0) : layer.naturalWidth;
+      const naturalHeight = isCanvas ? Number(layer.dataset.imageHeight || 0) : layer.naturalHeight;
+      if (!(naturalWidth > 0)) return null;
+      return {
+        naturalWidth,
+        naturalHeight,
+        src: isCanvas ? String(layer.dataset.manifest || '') : layer.currentSrc || layer.src,
+      };
     },
     { timeout: WAIT.long, interval: 120, label },
   );
 }
 
-/** 位置测量：与 config 的 calibration + 图片实际显示区域对比 */
+/** 位置测量：与配置里的世界范围 + 底图实际显示区域对比 */
 async function measurePositions(dimension) {
   const info = await page.evalFn(IMAGE_INFO);
-  if (!info) throw new Error('找不到 #map-image');
+  if (!info) throw new Error('找不到底图元素');
   if (!info.naturalWidth || !info.naturalHeight) {
-    throw new Error(`#map-image 尚未加载（naturalWidth=${info.naturalWidth}）`);
+    throw new Error(`底图尚未加载（naturalWidth=${info.naturalWidth}）`);
   }
   if (!(info.rect.width > 0 && info.rect.height > 0)) {
-    throw new Error(`#map-image 显示尺寸为 0（width=${info.rect.width}, height=${info.rect.height}）`);
+    throw new Error(`底图显示尺寸为 0（width=${info.rect.width}, height=${info.rect.height}）`);
   }
   const stageScale = info.rect.width / info.naturalWidth;
   const scaleY = info.rect.height / info.naturalHeight;
@@ -1069,7 +1114,7 @@ async function main() {
   browser.attach?.(conn);
   page = await Page.open(conn);
   await page.addInitScript(INIT_SCRIPT);
-  diag = createDiagnostics(page);
+  diag = createDiagnostics(page, { ignore: isExpectedTileMiss });
 
   await page.setViewport({ ...VIEWPORT });
   await page.navigate(baseUrl, { timeout: WAIT.long });
@@ -1109,9 +1154,9 @@ async function main() {
     return `${state.buttons.map((button) => button.text).join(' / ')}；初始标记 ${state.markerCount} 个`;
   });
 
-  await check('boot.image', '#map-image 加载完成（complete=true 且 naturalWidth>0）', async () => {
+  await check('boot.image', '底图加载完成（图片 complete=true 且 naturalWidth>0；瓦片维度读 manifest 逻辑尺寸）', async () => {
     if (rep.failed.some((result) => result.id === 'boot.ui')) {
-      throw new Error('#map-image 未加载：应用脚本执行失败（见 boot.ui 失败项）');
+      throw new Error('底图未加载：应用脚本执行失败（见 boot.ui 失败项）');
     }
     try {
       const info = await waitForImageLoaded();
@@ -1120,20 +1165,25 @@ async function main() {
       const state = await page
         .evalFn(() => {
           const img = document.querySelector('#map-image');
-          if (!img) return { found: false };
+          const canvas = document.querySelector('#map-canvas');
+          const layer = canvas && !canvas.hidden ? canvas : img;
+          if (!layer) return { found: false };
+          const isCanvas = layer.tagName === 'CANVAS';
           return {
             found: true,
-            src: img.currentSrc || img.src || '',
-            complete: img.complete,
-            naturalWidth: img.naturalWidth,
-            naturalHeight: img.naturalHeight,
-            display: getComputedStyle(img).display,
-            visibility: getComputedStyle(img).visibility,
+            kind: isCanvas ? 'tiles' : 'image',
+            src: isCanvas ? String(layer.dataset.manifest || '') : layer.currentSrc || layer.src || '',
+            complete: isCanvas ? Number(layer.dataset.imageWidth || 0) > 0 : layer.complete,
+            naturalWidth: isCanvas ? Number(layer.dataset.imageWidth || 0) : layer.naturalWidth,
+            naturalHeight: isCanvas ? Number(layer.dataset.imageHeight || 0) : layer.naturalHeight,
+            display: getComputedStyle(layer).display,
+            visibility: getComputedStyle(layer).visibility,
+            baseMode: document.body.dataset.base ?? null,
           };
         })
         .catch(() => null);
       throw new Error(
-        `${error.message}；#map-image 实际状态：${JSON.stringify(state)}（期望 complete=true 且 naturalWidth>0）`,
+        `${error.message}；底图实际状态：${JSON.stringify(state)}（期望已就绪且尺寸 > 0）`,
       );
     }
   });
@@ -1162,22 +1212,23 @@ async function main() {
     return labels.join(' / ');
   });
 
-  await checkIfReady('dim.switch', '依次切换「下界」「末地」并切回主世界（基底图与标记数量随之变化）', async () => {
+  await checkIfReady('dim.switch', '依次切换「下界」「末地」并切回主世界（底图与标记数量随之变化）', async () => {
     const details = [];
     for (const dimensionId of ['nether', 'the_end', 'overworld']) {
       const dimension = dimensionById(dimensionId);
       const { state } = await switchDimension(dimensionId);
       const srcDecoded = state.imageSrc ? decodeURIComponent(state.imageSrc) : '';
-      if (!srcDecoded.includes(dimension.image)) {
+      const expectedSource = dimension.tiles ? dimension.tiles.manifest : dimension.image;
+      if (!srcDecoded.includes(expectedSource)) {
         throw new Error(
-          `切到 ${dimension.name} 后基底图是 ${truncate(srcDecoded, 120)}，期望包含 ${dimension.image}`,
+          `切到 ${dimension.name} 后底图来源是 ${truncate(srcDecoded, 120)}，期望包含 ${expectedSource}`,
         );
       }
       if (state.bodyDimension && state.bodyDimension !== dimensionId) {
         throw new Error(`切到 ${dimension.name} 后 body[data-dimension]=${state.bodyDimension}`);
       }
       if (!(state.imageNaturalWidth > 0)) {
-        throw new Error(`切到 ${dimension.name} 后基底图未加载（naturalWidth=0）`);
+        throw new Error(`切到 ${dimension.name} 后底图未就绪（naturalWidth=0）`);
       }
       if (state.markerCount !== dimension.waypoints.length) {
         throw new Error(
@@ -1185,9 +1236,8 @@ async function main() {
         );
       }
       ctx.currentDimensionId = dimensionId;
-      details.push(`${dimension.name}:${state.markerCount} 点`);
+      details.push(`${dimension.name}:${state.markerCount} 点/${state.layerKind === 'tiles' ? '瓦片' : '图片'}`);
     }
-    const overlord = dimensionById('overworld');
     ctx.currentDimensionId = 'overworld';
     return details.join(' → ');
   });
@@ -1242,11 +1292,11 @@ async function main() {
     const imageBefore = before.info.rect;
     const viewport = before.info.viewport;
     if (!viewport) throw new Error('找不到 #viewport');
-    // 落点必须真正命中 #map-image：标记 / 详情弹窗 / 缩放面板上的滚轮会被 viewer 有意忽略
+    // 落点必须真正命中底图元素：标记 / 详情弹窗 / 缩放面板上的滚轮会被 viewer 有意忽略
     const point = await findSafeMapPoint(viewport);
     if (!point) {
       throw new Error(
-        '视口内找不到命中 #map-image 的落点（被标记 / 弹窗 / 浮层完全覆盖）；' +
+        '视口内找不到命中底图的落点（被标记 / 弹窗 / 浮层完全覆盖）；' +
           `当前命中：${await page.evaluate(
             '(() => { const vp = document.getElementById("viewport").getBoundingClientRect(); const el = document.elementFromPoint(vp.left + vp.width / 2, vp.top + vp.height / 2); return el ? el.tagName + "#" + el.id + "." + String(el.className) : "null"; })()',
           )}`,
@@ -1327,6 +1377,208 @@ async function main() {
     const info = await page.evalFn(IMAGE_INFO);
     if (!(info.rect.width > 0)) throw new Error('恢复视图后图片尺寸为 0');
     return `图片 ${Math.round(info.rect.width)}×${Math.round(info.rect.height)}`;
+  });
+
+  /* ---------------- 4a. 瓦片底图（manifest 驱动 + 层级随缩放切换） ---------------- */
+  await checkIfReady('tiles.render', '瓦片底图渲染：主世界用 <canvas> 出图，世界范围来自 manifest', async () => {
+    await page.evalFn(() => window.__mapApp.applyDimension('overworld'));
+    await page.settle(320);
+    await resetView();
+
+    const info = await page.evalFn(() => {
+      const canvas = document.querySelector('#map-canvas');
+      const img = document.querySelector('#map-image');
+      const tiles = window.__mapApp.tiles ? window.__mapApp.tiles() : null;
+      if (!canvas || !tiles) return { ok: false, reason: '找不到 #map-canvas 或 TileLayer（该维度没走瓦片？）' };
+      const ctx = canvas.getContext('2d');
+      // 整图视图下 canvas 就是整幅地图（level 3 → 512×640），扫全图统计不透明像素：
+      // 地图内容只覆盖一部分（未探索区域没有瓦片），所以用比例而不是中心点取样。
+      let opaque = 0;
+      let sampled = 0;
+      try {
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        sampled = canvas.width * canvas.height;
+        for (let i = 3; i < data.length; i += 4) {
+          if (data[i] > 8) opaque += 1;
+        }
+      } catch (error) {
+        return { ok: false, reason: `读取 canvas 像素失败：${error.message}` };
+      }
+      const proj = window.__mapApp.projection;
+      return {
+        ok: true,
+        canvasVisible: !canvas.hidden,
+        imgHidden: Boolean(img && img.hidden),
+        baseMode: document.body.dataset.base ?? null,
+        logicalWidth: Number(canvas.dataset.imageWidth || 0),
+        logicalHeight: Number(canvas.dataset.imageHeight || 0),
+        manifest: canvas.dataset.manifest || '',
+        cssWidth: canvas.getBoundingClientRect().width,
+        stageWidth: document.querySelector('#stage').style.width,
+        opaque,
+        sampled,
+        projection: proj
+          ? {
+              xMin: proj.xMin,
+              xMax: proj.xMax,
+              zMin: proj.zMin,
+              zMax: proj.zMax,
+              imageWidth: proj.imageWidth,
+              imageHeight: proj.imageHeight,
+            }
+          : null,
+        stats: tiles,
+      };
+    });
+    if (!info || !info.ok) throw new Error(info?.reason || '读取瓦片底图状态失败');
+
+    const tileset = await page.evalFn(() =>
+      window.__mapApp.tileset ? window.__mapApp.tileset.toJSON() : null,
+    );
+    if (!tileset) throw new Error('window.__mapApp.tileset 为空（主世界应使用瓦片底图）');
+
+    const problems = [];
+    if (!info.canvasVisible || !info.imgHidden) {
+      problems.push(`底图切换不对：canvas.hidden=${!info.canvasVisible} img.hidden=${!info.imgHidden}`);
+    }
+    if (info.baseMode !== 'tiles') problems.push(`body[data-base]=${info.baseMode}，期望 tiles`);
+    if (!info.manifest.includes(tileset.manifestUrl)) {
+      problems.push(`canvas 的 manifest 标记是「${info.manifest}」，期望 ${tileset.manifestUrl}`);
+    }
+    if (info.logicalWidth !== tileset.imageWidth || info.logicalHeight !== tileset.imageHeight) {
+      problems.push(
+        `底图逻辑尺寸 ${info.logicalWidth}×${info.logicalHeight}，manifest 世界跨度是 ` +
+          `${tileset.imageWidth}×${tileset.imageHeight}`,
+      );
+    }
+    const p = info.projection;
+    const b = tileset.bounds;
+    if (!p) {
+      problems.push('没有投影');
+    } else if (
+      Math.abs(p.xMin - b.xMin) > 1e-6 || Math.abs(p.xMax - b.xMax) > 1e-6 ||
+      Math.abs(p.zMin - b.zMin) > 1e-6 || Math.abs(p.zMax - b.zMax) > 1e-6
+    ) {
+      problems.push(
+        `投影世界范围 X[${p.xMin}, ${p.xMax}] Z[${p.zMin}, ${p.zMax}] 与 manifest ` +
+          `X[${b.xMin}, ${b.xMax}] Z[${b.zMin}, ${b.zMax}] 不一致`,
+      );
+    }
+    if (!(info.opaque > info.sampled * 0.02)) {
+      problems.push(
+        `画布只有 ${info.opaque}/${info.sampled} 个不透明像素（< 2%），瓦片没画出来`,
+      );
+    }
+    if (!(info.stats.requests > 0)) problems.push('一张瓦片都没请求');
+    if (!(info.stats.drawn > 0)) problems.push('drawImage 次数为 0');
+    if (!(info.stats.cache <= info.stats.maxTiles)) {
+      problems.push(`缓存 ${info.stats.cache} 张，超过上限 ${info.stats.maxTiles}`);
+    }
+    if (problems.length) throw new Error(problems.slice(0, 5).join('；'));
+
+    return (
+      `画布 ${info.stats.canvasWidth}×${info.stats.canvasHeight} 中 ${info.opaque}/${info.sampled} 像素不透明；` +
+      `世界范围 X[${p.xMin}, ${p.xMax}] Z[${p.zMin}, ${p.zMax}]；` +
+      `层级 ${info.stats.level}，已请求 ${info.stats.requests} 张（缺 ${info.stats.missing}），` +
+      `缓存 ${info.stats.cache}/${info.stats.maxTiles}`
+    );
+  });
+
+  await checkIfReady('tiles.levels', '瓦片层级随缩放切换（放大更细 / 缩小更粗，只取视口内瓦片）', async () => {
+    const tileset = await page.evalFn(() =>
+      window.__mapApp.tileset ? window.__mapApp.tileset.toJSON() : null,
+    );
+    if (!tileset) throw new Error('当前维度不是瓦片底图');
+
+    const sample = () =>
+      page.evalFn(() => {
+        const tiles = window.__mapApp.tiles();
+        const vs = window.__mapApp.view.getViewState();
+        return {
+          scale: vs.scale,
+          level: tiles.level,
+          canvasWidth: tiles.canvasWidth,
+          requests: tiles.requests,
+          drawn: tiles.drawn,
+          visibleTiles: tiles.visibleTiles,
+        };
+      });
+
+    const expectedLevel = (scale) => {
+      let best = tileset.levels[0];
+      let bestScore = Infinity;
+      for (const entry of tileset.levels) {
+        const score = Math.abs(Math.log2(entry.blocksPerPixel * scale));
+        if (score < bestScore - 1e-9) {
+          best = entry;
+          bestScore = score;
+        }
+      }
+      return best.level;
+    };
+
+    const centerOnOrigin = (scale) =>
+      page.evalFn((value) => {
+        const proj = window.__mapApp.projection;
+        const pt = proj.worldToImage(0, 0);
+        window.__mapApp.view.centerOnImagePoint(pt.px, pt.py, { scale: value, animate: false });
+      }, scale);
+
+    // ① 整图（最小缩放）→ 最粗的层级
+    await resetView();
+    await page.settle(420);
+    const far = await sample();
+
+    // ② 放大到 1 方块 = 1 屏幕像素 → 最细层级（level 0）
+    await centerOnOrigin(1);
+    await page.settle(900);
+    const near = await sample();
+
+    // ③ 缩回 4 方块 = 1 屏幕像素 → 中间层级
+    await centerOnOrigin(0.25);
+    await page.settle(700);
+    const mid = await sample();
+
+    await resetView();
+    await page.settle(400);
+
+    const problems = [];
+    if (near.level !== expectedLevel(near.scale)) {
+      problems.push(`scale=${near.scale.toFixed(3)} 选了层级 ${near.level}，期望 ${expectedLevel(near.scale)}`);
+    }
+    if (mid.level !== expectedLevel(mid.scale)) {
+      problems.push(`scale=${mid.scale.toFixed(3)} 选了层级 ${mid.level}，期望 ${expectedLevel(mid.scale)}`);
+    }
+    if (!(near.level < mid.level && mid.level < far.level)) {
+      problems.push(
+        `层级没有随缩放单调变化：放大 ${near.level} / 中间 ${mid.level} / 整图 ${far.level}`,
+      );
+    }
+    if (!(near.canvasWidth > mid.canvasWidth && mid.canvasWidth > far.canvasWidth)) {
+      problems.push(
+        `canvas 位图没有随层级变化：放大 ${near.canvasWidth} / 中间 ${mid.canvasWidth} / 整图 ${far.canvasWidth}`,
+      );
+    }
+    const totalTiles = tileset.levels[0].cols * tileset.levels[0].rows;
+    // 整图视图应当正好覆盖最粗层级的全部瓦片；放大到 1:1 时只应覆盖视口那一小块
+    if (far.visibleTiles > 12) {
+      problems.push(`整图视图申报了 ${far.visibleTiles} 张可见瓦片，超过最粗层级的 6 张`);
+    }
+    if (!(near.visibleTiles > 0 && near.visibleTiles < totalTiles)) {
+      problems.push(
+        `放大到 1:1 时可见瓦片 ${near.visibleTiles} 张，期望 0 < n < ${totalTiles}（视口裁剪）`,
+      );
+    }
+    if (!(near.drawn > 0 && far.drawn > 0)) {
+      problems.push(`有视图没画出瓦片（整图 drawn=${far.drawn}，放大 drawn=${near.drawn}）`);
+    }
+    if (problems.length) throw new Error(problems.slice(0, 5).join('；'));
+
+    return (
+      `整图 level ${far.level}（${far.canvasWidth}px 位图 / ${far.visibleTiles} 张）→ 放大 level ${near.level}` +
+      `（${near.canvasWidth}px / ${near.visibleTiles} 张，全层 ${totalTiles} 张）` +
+      `→ 缩回 level ${mid.level}（${mid.canvasWidth}px）`
+    );
   });
 
   /* ---------------- 4b. 配置驱动 + 画幅变化后重新校准 ---------------- */
@@ -1858,15 +2110,18 @@ async function main() {
     let secondCenter = null;
     try {
       await second.addInitScript(INIT_SCRIPT);
-      secondDiag = createDiagnostics(second);
+      secondDiag = createDiagnostics(second, { ignore: isExpectedTileMiss });
       await second.setViewport({ ...VIEWPORT });
       const secondUrl = `${baseUrl}${hash.raw}`;
       await second.navigate(secondUrl, { timeout: WAIT.long });
       await second.waitFor(
         () => {
           const buttons = document.querySelectorAll('#dimension-switch button, #dimension-switch [role="tab"]');
-          const image = document.querySelector('#map-image');
-          if (buttons.length < 3 || !image || !image.complete || image.naturalWidth <= 0) return null;
+          const layer = document.querySelector('#map-canvas:not([hidden]), #map-image:not([hidden])');
+          if (buttons.length < 3 || !layer) return null;
+          const isCanvas = layer.tagName === 'CANVAS';
+          const width = isCanvas ? Number(layer.dataset.imageWidth || 0) : layer.naturalWidth;
+          if (!(width > 0)) return null;
           if (document.body.dataset.dimension !== 'overworld') return null;
           return true;
         },
@@ -1878,12 +2133,13 @@ async function main() {
         const api = window.__mapApp;
         const viewState =
           api && api.view && typeof api.view.getViewState === 'function' ? api.view.getViewState() : null;
-        const image = document.querySelector('#map-image');
+        const image = document.querySelector('#map-canvas:not([hidden]), #map-image:not([hidden])');
+        const isCanvas = Boolean(image) && image.tagName === 'CANVAS';
         return {
           bodyDimension: document.body.dataset.dimension ?? null,
           hash: location.hash,
-          naturalWidth: image?.naturalWidth ?? 0,
-          naturalHeight: image?.naturalHeight ?? 0,
+          naturalWidth: image ? (isCanvas ? Number(image.dataset.imageWidth || 0) : image.naturalWidth) : 0,
+          naturalHeight: image ? (isCanvas ? Number(image.dataset.imageHeight || 0) : image.naturalHeight) : 0,
           viewState: viewState
             ? {
                 scale: viewState.scale,

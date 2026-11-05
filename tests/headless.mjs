@@ -1022,16 +1022,30 @@ export class Page {
  * 页面诊断（console error / 未捕获异常 / HTTP 错误）
  * ------------------------------------------------------------------ */
 
-export function createDiagnostics(page) {
+/**
+ * @param {Page} page
+ * @param {{ignore?: (error: {kind:string, text:string, where?:string}) => boolean}} [options]
+ *   ignore 返回 true 的错误不计入（例如瓦片底图的 404 属于正常情况，见 docs/CONTRACT.md）
+ */
+export function createDiagnostics(page, { ignore } = {}) {
   const errors = [];
   const offs = [];
+  const shouldIgnore = typeof ignore === 'function' ? ignore : () => false;
+  const push = (error) => {
+    try {
+      if (shouldIgnore(error)) return;
+    } catch {
+      /* ignore 回调自身出错时按「不忽略」处理 */
+    }
+    errors.push(error);
+  };
 
   offs.push(
     page.on('Runtime.consoleAPICalled', (params) => {
       if (params.type !== 'error' && params.type !== 'assert') return;
       const text = (params.args || []).map(describeRemoteObject).join(' ');
       const frame = params.stackTrace?.callFrames?.[0];
-      errors.push({
+      push({
         kind: params.type === 'assert' ? 'console.assert' : 'console.error',
         text,
         where: frame ? `${frame.url}:${(frame.lineNumber ?? 0) + 1}` : undefined,
@@ -1042,7 +1056,7 @@ export function createDiagnostics(page) {
   offs.push(
     page.on('Runtime.exceptionThrown', ({ exceptionDetails }) => {
       const exception = exceptionDetails?.exception;
-      errors.push({
+      push({
         kind: 'exception',
         text: exception?.description || exceptionDetails?.text || '未捕获异常',
         where:
@@ -1056,7 +1070,7 @@ export function createDiagnostics(page) {
   offs.push(
     page.on('Log.entryAdded', ({ entry }) => {
       if (!entry || entry.level !== 'error') return;
-      errors.push({
+      push({
         kind: `log.${entry.source || 'unknown'}`,
         text: entry.text,
         where: entry.url,
@@ -1068,7 +1082,7 @@ export function createDiagnostics(page) {
     page.on('Network.responseReceived', ({ response }) => {
       if (!response?.status || response.status < 400) return;
       // 404 等资源错误单独归类：集成期最常见的问题
-      errors.push({
+      push({
         kind: 'network.http',
         text: `HTTP ${response.status} ${response.statusText || ''}`.trim(),
         where: response.url,

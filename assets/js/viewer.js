@@ -3,8 +3,13 @@
  * =============================================================================
  * 只操作 index.html 里已经存在的节点，不创建任何顶层 DOM：
  *   #viewport.map-viewport   裁剪容器（overflow:hidden / position:relative）
- *   #stage.map-stage         被 transform 的图层（内含 <img id="map-image">）
+ *   #stage.map-stage         被 transform 的图层（内含底图元素）
  *   #overlay.map-overlay     屏幕坐标覆盖层（标记 / 网格 / 准星），不随 transform 缩放
+ *
+ * 底图元素（base layer）有两种，同一时刻只有一个可见，但「定位 / 变换 / 尺寸」的语义完全一样：
+ *   <img id="map-image">      单张图片维度：由 setImage(url) 载入，尺寸取 naturalWidth/Height；
+ *   <canvas id="map-canvas">  瓦片维度：由 setRasterBase({width,height}) 直接给出逻辑尺寸，
+ *                             内容由 assets/js/tiles.js 的 TileLayer 绘制。
  *
  * 变换语义（契约 §3，全模块唯一真相）：
  *   图片像素 (px, py) → 视口 CSS 像素 (sx, sy) = (tx + px * scale, ty + py * scale)
@@ -98,8 +103,12 @@ export class MapView {
 
     this.viewport = viewportEl;
     this.stage = viewportEl.querySelector('#stage, .map-stage');
-    this.imageEl = viewportEl.querySelector('#map-image, .map-image')
+    // 单张图片底图 / 瓦片底图（canvas）。imageEl 始终指向「当前生效」的那一个。
+    this.imgEl = viewportEl.querySelector('#map-image, .map-image')
       || (this.stage ? this.stage.querySelector('#map-image, .map-image') : null);
+    this.canvasEl = viewportEl.querySelector('#map-canvas')
+      || (this.stage ? this.stage.querySelector('#map-canvas') : null);
+    this.imageEl = this.imgEl || this.canvasEl;
     this.overlayEl = viewportEl.querySelector('#overlay, .map-overlay');
 
     this.onViewChange = typeof onViewChange === 'function' ? onViewChange : null;
@@ -332,16 +341,19 @@ export class MapView {
   }
 
   /**
-   * 载入基底图。resolve 后 getImageSize() 可用；失败时 reject（不抛同步异常）。
+   * 载入基底图（单张图片）。resolve 后 getImageSize() 可用；失败时 reject（不抛同步异常）。
+   * 调用它会把底图元素切回 <img id="map-image">。
    * @param {string} url
    * @returns {Promise<{width:number, height:number}>}
    */
   setImage(url) {
-    const img = this.imageEl;
+    const img = this.imgEl || this.imageEl;
     if (!img) return Promise.reject(new Error('[MapView] 找不到 #map-image 元素'));
     if (!url || typeof url !== 'string') {
       return Promise.reject(new Error('[MapView] setImage 需要一个图片地址'));
     }
+    // 从瓦片维度切回来时，底图元素要换回 <img>
+    this.setBaseLayer(img);
 
     this._loadToken += 1;
     const token = this._loadToken;
@@ -400,7 +412,50 @@ export class MapView {
     });
   }
 
-  /** 把图片原始尺寸写进 #stage / #map-image 的内联样式，保证 1 图片像素 = 1 CSS 像素（scale=1 时） */
+  /**
+   * 切换当前底图元素（<img> 或 <canvas>）。
+   * 两种元素的定位 / 变换语义完全一致：都是 #stage 的子节点、按「原始像素」布局。
+   * @param {Element|null} el
+   * @returns {Element|null} 切换后的底图元素
+   */
+  setBaseLayer(el) {
+    if (!el || el === this.imageEl) return this.imageEl;
+    this.imageEl = el;
+    this._applyStaticStyle();
+    if (this._imageSize) this._applyImageSize(this._imageSize.width, this._imageSize.height);
+    return this.imageEl;
+  }
+
+  /**
+   * 直接把底图设成「已知逻辑尺寸的栅格」（瓦片底图的 <canvas>）。
+   * 与 setImage 的区别：不加载网络图片，尺寸由调用方给出（瓦片 manifest 的世界跨度），
+   * 内容由 TileLayer 自己画。
+   *
+   * @param {{width:number, height:number, element?: Element}} params
+   * @returns {Promise<{width:number, height:number}>}
+   */
+  setRasterBase({ width, height, element } = {}) {
+    const w = Number(width);
+    const h = Number(height);
+    if (!(w > 0) || !(h > 0)) {
+      return Promise.reject(new Error('[MapView] setRasterBase 需要正的 width / height'));
+    }
+    const layer = element || this.canvasEl;
+    if (!layer) return Promise.reject(new Error('[MapView] 找不到瓦片底图 <canvas id="map-canvas">'));
+
+    // 抢占 setImage 的竞态令牌：之前的图片加载即使回来了也不再改尺寸
+    this._loadToken += 1;
+    this.setBaseLayer(layer);
+    this._pendingAutoFit = true;
+    this._imageSize = { width: w, height: h };
+    this._applyImageSize(w, h);
+    if (this._pendingAutoFit) this._fitNow();
+    this._applyTransform();
+    this._emit();
+    return Promise.resolve({ width: w, height: h });
+  }
+
+  /** 把图片原始尺寸写进 #stage / 底图元素的内联样式，保证 1 图片像素 = 1 CSS 像素（scale=1 时） */
   _applyImageSize(width, height) {
     if (this.stage) {
       this.stage.style.width = `${width}px`;

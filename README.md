@@ -1,12 +1,13 @@
 # Steve Server 地图
 
-Minecraft 服务器的**离线地图站点**：一张导出的地图 PNG + 一份 `config.json`，就能得到一个可以拖动缩放、按维度切换、带分组和搜索的网页地图。
+Minecraft 服务器的**离线地图站点**：一张导出的地图 PNG（或一套瓦片）+ 一份 `config.json`，就能得到一个可以拖动缩放、按维度切换、带分组和搜索的网页地图。
 
 纯静态、零依赖、零构建：没有 npm、没有 CDN、不联网，把整个目录丢到 GitHub Pages、对象存储或内网 IIS/nginx 上就能用。
 
 **线上地址：<https://steveservermap.github.io/>**（部署在 GitHub Pages，`main` 分支根目录，详见 [第 8 节](#8-部署到-github-pages)）
 
-- 🗺️ **多维度**：主世界 / 下界 / 末地各一张基底图，一键切换
+- 🗺️ **多维度**：主世界 / 下界 / 末地，一键切换
+- 🧱 **两种底图**：主世界用 **瓦片底图**（`tiles/`，按缩放自动切层级、只加载视口内的瓦片）；其他维度仍是「单张 PNG + `calibration`」。两种模式对路径点、测距、搜索等上层功能完全一致
 - 📍 **路径点由配置驱动**：加一个点 = 在 `config.json` 里加几行
 - 🎯 **画幅变了也不丢点**：路径点存的是**世界坐标**，重新导出地图后重新校准一次，所有点自动对回（本项目的核心设计）
 - 🔍 分组显隐与折叠、搜索、标签模式、坐标网格、比例尺、坐标读数、链接分享
@@ -85,7 +86,10 @@ SteveServerMap.github.io/
 ├── index.html                 页面骨架（唯一入口）
 ├── config.json                ★ 你要编辑的配置文件：维度 / 画幅 / 分组 / 路径点
 ├── config.schema.json         配置的 JSON Schema（供编辑器补全与校验）
-├── 主世界.png                 基底地图（主世界）
+├── tiles/                     ★ 主世界的瓦片底图（manifest + 各层级 PNG，可选）
+│   ├── manifest.json          瓦片清单：层级、世界范围、每层瓦片编号范围
+│   └── tiles/<level>/<x>_<y>.png  瓦片本体（列_行，缺文件 = 该处全透明，属正常）
+├── 主世界.png                 单张基底图（主世界的兜底 / 其他维度仍用它）
 ├── 下界.png                   基底地图（下界，当前是占位图）
 ├── 末地.png                   基底地图（末地，当前是占位图）
 ├── serve.cmd                  Windows 一键本地预览
@@ -99,6 +103,7 @@ SteveServerMap.github.io/
 │   └── js/
 │       ├── config.js          读取 + 规范化 config.json
 │       ├── coords.js          世界坐标 ↔ 图片像素（纯函数）
+│       ├── tiles.js           瓦片底图：manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存
 │       ├── viewer.js          地图平移 / 缩放引擎
 │       ├── markers.js         路径点标记与详情卡片
 │       ├── sidebar.js         左侧菜单（分组 / 列表 / 搜索）
@@ -181,7 +186,8 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 | --- | --- | --- | --- |
 | `id` | string | ✅ | 维度标识，用于 URL 与内部引用，如 `overworld` / `nether` / `the_end` |
 | `name` | string | ✅ | 显示名称，如 `主世界` |
-| `image` | string | ✅ | 基底图片路径，**相对站点根目录**，如 `主世界.png` |
+| `image` | string | ✅ | 基底图片路径，**相对站点根目录**，如 `主世界.png`。配了 `tiles` 时它只在瓦片加载失败时兜底 |
+| `tiles` | object / string | — | 瓦片底图，见 4.6；配了它就用瓦片渲染，世界范围以 manifest 为准（`calibration` 不再参与换算） |
 | `calibration` | object | — | 画幅校准参数，见 4.3；缺失时路径点无法定位，界面会提示「未校准」 |
 | `groups` | array | — | 分组，见 4.4 |
 | `waypoints` | array | — | 路径点，见 4.5 |
@@ -247,7 +253,36 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 | `shop` | 🛒 | `spawn` | 🌍 | `bed` | 🛏️ |
 | `pvp` | ⚔️ | `event` | 🎪 | `question` | ❓ |
 
-### 4.6 一份完整的示例
+### 4.6 瓦片底图 `tiles`（可选）
+
+地图很大时，一张 PNG 可能有几十 MB，首屏要等很久。这时可以把地图切成瓦片：页面按当前缩放自动挑层级，只下载视口里那几张。
+
+```json
+"tiles": { "manifest": "tiles/manifest.json" }
+```
+
+也可以直接写成字符串：`"tiles": "tiles/manifest.json"`。
+
+`manifest.json` 的结构（由导出工具生成，一般不用手改）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `tileSize` | 每张瓦片的像素边长（通常 256） |
+| `source` | 导出工具标识，仅作备注 |
+| `levels[]` | 每个缩放层级一条：`level`（0 = 1 像素 = 1 方块）、`blocksPerPixel`、`minX/maxX/minZ/maxZ`（该层实际存在的瓦片列/行范围）、`cols/rows`、`originBlockX/originBlockZ`（该层 (0,0) 瓦片左上角的世界坐标） |
+| `worldBlockRange` | 整幅地图覆盖的世界范围 `{xMin,xMax,zMin,zMax}`，**1 像素 = 1 方块**，也是路径点换算的唯一依据 |
+
+瓦片文件放在 manifest 同级的 `tiles/<level>/<x>_<y>.png`（列_行）。**全透明的瓦片不会被导出**，所以编号不连续、请求 404 是正常情况，页面会静默跳过，不报错也不影响其他功能。
+
+行为说明：
+
+- 世界范围 = `worldBlockRange`，所以配了 `tiles` 的维度**不需要 `calibration`**（写了也只当备注，`window.__mapApp.applyCalibration` 对它无效）。
+- 层级选择：让「1 瓦片像素 ≈ 1 屏幕像素」，即 `blocksPerPixel × 当前缩放` 最接近 1 的那一层。
+- 放大时关掉插值（`imageSmoothingEnabled = false` + `image-rendering: pixelated`），保持像素锐利。
+- 已解码瓦片走 LRU 缓存，上限 400 张（约 100 MB）；canvas 位图另有 2400 万像素的硬上限，超过时按比例降低位图分辨率，避免超大导出把内存撑爆。
+- 配了 `tiles` 但 manifest 加载失败时，会自动退回 `image` + `calibration`（原来的单张底图）。
+
+### 4.7 一份完整的示例
 
 ```json
 {
@@ -423,13 +458,15 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 ## 7. 替换基底地图
 
-三张基底图固定放在站点根目录：
+当前主世界走**瓦片底图**（`tiles/`），下界 / 末地仍是单张 PNG：
 
-| 维度 | 默认文件名 | 当前状态 |
+| 维度 | 底图 | 说明 |
 | --- | --- | --- |
-| 主世界 | `主世界.png` | 已放置（3584×5120） |
+| 主世界 | `tiles/manifest.json` + `tiles/tiles/<level>/<x>_<y>.png` | 瓦片底图；`主世界.png`（3584×5120）只在 manifest 加载失败时兜底 |
 | 下界 | `下界.png` | **占位图**，请替换成真实导出图 |
 | 末地 | `末地.png` | **占位图**，请替换成真实导出图 |
+
+换瓦片地图：把新的 `manifest.json` 与 `tiles/` 目录整体覆盖，确认 `config.json` 里该维度的 `"tiles": { "manifest": "tiles/manifest.json" }` 不变即可 —— 瓦片自带世界范围，**不需要再校准**（路径点会按新 manifest 的 `worldBlockRange` 自动对回）。
 
 两种换法，任选其一：
 
@@ -443,6 +480,7 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 - 中文文件名可用，但少数旧浏览器/工具链对 URL 编码处理不好；追求稳妥可以改成英文名（`overworld.png` / `nether.png` / `end.png`）。
 - 换图后**一定要重新校准**（第 6 节）：图片换了，画幅几乎必然变化。
 - 大图建议：单边长不超过约 8000 px、文件控制在 10 MB 以内，否则手机端加载会慢。PNG 可以用 `pngquant` / `oxipng` 压缩；如果地图是纯色块风格，压完往往能小一半以上。
+- 地图特别大时优先用**瓦片底图**（见 [4.6](#46-瓦片底图-tiles可选)）：首屏只下载视口内的瓦片，比一张几十 MB 的大图快得多。
 - 地图渲染工具随意：Chunky、Minecraft Overviewer、unmined 等导出的俯视图都可以，只要是一张**正上方俯视、无透视变形**的图片。
 
 ---
@@ -520,6 +558,12 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 **Q：地图区提示「地图还没上传」/ 图片 404。**
 按顺序检查：① 文件名和 `config.json` 里的 `image` 是否**完全一致**（含扩展名、大小写）；② 图片是否在站点根目录（或 `image` 里写的相对路径是否正确）；③ 浏览器开发者工具 Network 面板看该图片请求是不是 404；④ 图片本身有没有损坏（能双击打开吗）。
 
+**Q：Network 里一堆 `tiles/tiles/<level>/<x>_<y>.png` 是 404，是坏了吗？**
+不是。瓦片导出时**全透明的瓦片不会落地**，所以编号不连续是常态。页面会静默跳过缺的瓦片（显示为透明背景），不影响路径点、测距和搜索。只要不是整屏空白就不用管。
+
+**Q：瓦片地图打开后某些区域是空的。**
+那一片在导出时就是空的（未探索 / 没有地图数据），不是加载失败。可以对比 `manifest.json` 里各层级的 `minX/maxX/minZ/maxZ` 确认覆盖范围。
+
 **Q：路径点整体偏移 / 全部跑到一起了。**
 先看侧栏是否有「当前维度画幅尚未校准」的提示 —— `calibrated: false` 或者 `calibration` 四个边界还是默认值，就会整体偏。按 [第 6 节](#6-画幅变了重新校准) 用两个地标校准一次即可。如果校准后仍然偏：检查两个地标的坐标是否填错（最容易发生）、两点是否离得太近；如果地图图片被非等比拉伸过，X/Z 比例会不一致，向导会给出提示。
 
@@ -537,6 +581,9 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 
 **Q：校准后只有我这台电脑是对的，别人打开还是歪的。**
 「应用并刷新」只写进当前浏览器的 localStorage。要把校准结果固化，必须点「复制 JSON 片段」→ 粘进 `config.json` 的 `calibration` → 保存并部署。页脚出现「本地校准生效（仅本浏览器）· 点击清除」时，说明你现在看到的是本地覆盖，点它即可清除。
+
+**Q：瓦片维度还需要校准吗？**
+不需要。瓦片自带世界范围（`manifest.json` 的 `worldBlockRange`），路径点按它换算；`config.json` 里该维度的 `calibration` 只作说明。只有用单张 `image` 的维度才需要校准。
 
 **Q：下界 / 末地地图是空白的。**
 仓库里的 `下界.png`、`末地.png` 目前是占位图。换成真实导出图，然后重新校准该维度即可。
@@ -558,7 +605,7 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 - ✅ Firefox 110+
 - ❌ 不支持 Internet Explorer
 
-页面完全离线：没有 CDN、没有外部字体、没有网络请求（除了本身的 `config.json` 和 PNG）。字体使用系统字体（`-apple-system` / `Segoe UI` / `Microsoft YaHei`），坐标用系统等宽字体显示。
+页面完全离线：没有 CDN、没有外部字体、没有网络请求（除了本身的 `config.json`、PNG 与 `tiles/` 里的瓦片）。字体使用系统字体（`-apple-system` / `Segoe UI` / `Microsoft YaHei`），坐标用系统等宽字体显示。
 
 ---
 

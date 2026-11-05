@@ -15,6 +15,7 @@ import { MapView } from './viewer.js';
 import { MarkerLayer } from './markers.js';
 import { MeasureLayer, formatDistance } from './measure.js';
 import { Sidebar } from './sidebar.js';
+import { TileLayer, loadTileset } from './tiles.js';
 
 /* ============================== 小工具 ============================== */
 
@@ -46,6 +47,8 @@ const state = {
   imageSize: null,
   projection: null,
   calibration: null,
+  /** 当前维度的瓦片集（Tileset）；用单张图片时为 null */
+  tileset: null,
   /** 测距模式开关 */
   measureActive: false,
   /** 用户是否已经手动操作过视角（没操作前不往地址栏写 hash，避免"复制地址栏"误分享视角） */
@@ -68,6 +71,8 @@ let gridCanvas = null;
 let gridCtx = null;
 let toastTimer = null;
 let hashTimer = null;
+/** @type {TileLayer|null} 瓦片底图渲染器（只有配置了 tiles 的维度才会激活） */
+let tileLayer = null;
 
 
 /* ============================== 启动 ============================== */
@@ -222,19 +227,23 @@ function initViewer() {
   viewport.addEventListener('wheel', armHashSync, { passive: true });
 }
 
-/** 每次视图变化：标记重排 + 缩放百分比 + 比例尺 + 网格 + hash */
+/** 每次视图变化：标记重排 + 缩放百分比 + 比例尺 + 网格 + 瓦片底图 + hash */
 const handleViewChange = (() => {
   let raf = 0;
   return (viewState) => {
     if (raf) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
-      const vs = viewState || safeViewState();
+      // 用「当前」视图状态而不是事件里捕获的那份：同一帧内可能连续发生多次变化
+      // （例如「整图适配 + 紧接着聚焦原点」），捕获值会过期，
+      // 瓦片层若按过期状态绘制就会贴错位置。
+      const vs = safeViewState() || viewState;
       tryCall(markers, 'update');
       tryCall(measure, 'update', vs);
       updateZoomIndicator(vs);
       updateScaleBar(vs);
       drawGrid(vs);
+      if (tileLayer && vs) tileLayer.update(vs);
       scheduleHashSync();
     });
   };
@@ -381,6 +390,7 @@ async function applyDimension(dimensionId, opts = {}) {
   state.imageSize = null;
   state.projection = null;
   state.calibration = null;
+  state.tileset = null;
   state.activeWaypointId = null;
   document.body.dataset.dimension = dim.id;
   setText('footer-dim', dim.name);
@@ -389,19 +399,45 @@ async function applyDimension(dimensionId, opts = {}) {
   tryCall(sidebar, 'setLoading', true);
   tryCall(markers, 'setData', [], [], null);
   hideMapState();
-  showMapState({ tone: 'loading', title: '正在载入地图…', text: dim.image || '（未配置图片）' });
+  showMapState({
+    tone: 'loading',
+    title: '正在载入地图…',
+    text: dim.tiles ? dim.tiles.manifest : (dim.image || '（未配置图片）'),
+  });
 
+  // ---- 底图：配了 tiles 就走瓦片，否则维持原来的「单张 image + calibration」 ----
   let size = null;
-  try {
-    size = await view.setImage(dim.image);
-    if (!size && view.getImageSize) size = view.getImageSize();
-  } catch (err) {
-    console.warn(`[app] 基底图加载失败：${dim.image}`, err);
-    size = null;
+  let tileset = null;
+  if (dim.tiles) {
+    try {
+      tileset = await loadTileset(dim.tiles.manifest);
+      await view.setRasterBase({ width: tileset.imageWidth, height: tileset.imageHeight });
+      size = { width: tileset.imageWidth, height: tileset.imageHeight };
+    } catch (err) {
+      console.warn(`[app] 瓦片底图加载失败：${dim.tiles.manifest}`, err);
+      tileset = null;
+      size = null;
+    }
+  }
+  if (!tileset) {
+    // 没有 tiles（或瓦片加载失败）→ 老逻辑：单张图片
+    if (!dim.image) {
+      size = null;
+    } else {
+      try {
+        size = await view.setImage(dim.image);
+        if (!size && view.getImageSize) size = view.getImageSize();
+      } catch (err) {
+        console.warn(`[app] 基底图加载失败：${dim.image}`, err);
+        size = null;
+      }
+    }
   }
   if (token !== state.loadToken) return; // 期间又切换了维度
   if (!size || !size.width) {
     // 缺图：仍然可用（路径点列表照常显示），但地图区给出引导
+    setBaseLayerMode('empty');
+    state.tileset = null;
     tryCall(sidebar, 'setLoading', false);
     tryCall(sidebar, 'setData', {
       waypoints: dim.waypoints,
@@ -415,17 +451,26 @@ async function applyDimension(dimensionId, opts = {}) {
     showMapState({
       tone: 'warn',
       title: `「${dim.name}」的地图还没上传`,
-      text: dim.image ? `找不到基底图片：${dim.image}` : '该维度没有配置 image 字段',
-      hint: '把导出的地图图片按这个文件名放到站点根目录即可；路径点会按世界坐标自动落位。',
+      text: dim.tiles
+        ? `找不到瓦片清单：${dim.tiles.manifest}`
+        : (dim.image ? `找不到基底图片：${dim.image}` : '该维度没有配置 image 字段'),
+      hint: dim.tiles
+        ? '确认 tiles/manifest.json 与 tiles/tiles/<level>/<x>_<y>.png 都已发布到站点。'
+        : '把导出的地图图片按这个文件名放到站点根目录即可；路径点会按世界坐标自动落位。',
     });
     updateFooterStatus();
     return;
   }
 
   state.imageSize = { width: size.width, height: size.height };
-  state.calibration = resolveCalibration(dim, state.imageSize);
+  state.tileset = tileset;
+  state.calibration = tileset
+    ? calibrationFromTileset(tileset, dim)
+    : resolveCalibration(dim, state.imageSize);
   state.projection = buildProjection(state.calibration, state.imageSize);
   tryCall(view, 'setProjection', state.projection);
+  // 瓦片底图：canvas 与 TileLayer 接线（单张图片时停用，避免继续请求瓦片）
+  applyBaseLayer(tileset);
   // 换维度时测量点不再有效：先记下数量再清空（提示要用）
   const measurePointsBeforeSwitch = measure ? measure.points.length : 0;
   tryCall(measure, 'setProjection', state.projection);
@@ -438,6 +483,8 @@ async function applyDimension(dimensionId, opts = {}) {
   if (!applied && !restoreDimensionView(dim.id, size)) {
     if (!focusOrigin({ animate: false, arm: false })) fitToContent({ animate: false, arm: false });
   }
+  // 视角定了之后立刻画一帧瓦片（之后的平移缩放由 onViewChange 驱动）
+  if (tileLayer) tileLayer.update(safeViewState());
 
   // 换维度后旧的搜索词/测量结果都不适用了，清掉并说清楚（否则会以为"这个维度没有点"）
   if (state.query) {
@@ -458,6 +505,69 @@ async function applyDimension(dimensionId, opts = {}) {
   updateFooterStatus();
   drawGrid(safeViewState());
   scheduleHashSync();
+}
+
+/* ---------------------------- 底图：瓦片 / 单张图片 ---------------------------- */
+
+/**
+ * 切换当前底图元素。
+ * @param {'tiles'|'image'|'empty'} mode
+ *   tiles → 显示 <canvas id="map-canvas">（瓦片）
+ *   image → 显示 <img id="map-image">（单张 PNG）
+ *   empty → 两个都藏起来（缺图 / 缺 manifest）
+ */
+function setBaseLayerMode(mode) {
+  const img = $('map-image');
+  const canvas = $('map-canvas');
+  if (img) img.hidden = mode === 'tiles';
+  if (canvas) canvas.hidden = mode !== 'tiles';
+  document.body.dataset.base = mode;
+}
+
+/** 给当前维度接上底图渲染器：有 tileset 用瓦片，否则停用并回到单张图片 */
+function applyBaseLayer(tileset) {
+  const canvas = $('map-canvas');
+  if (!tileset) {
+    setBaseLayerMode('image');
+    if (tileLayer) tileLayer.setActive(false);
+    return;
+  }
+  setBaseLayerMode('tiles');
+  if (!canvas) {
+    console.warn('[app] 缺少 #map-canvas，瓦片底图无法渲染');
+    return;
+  }
+  if (!tileLayer) tileLayer = new TileLayer(canvas);
+  tileLayer.setTileset(tileset);
+  tileLayer.setActive(true);
+  // 把逻辑尺寸写到 dataset：调试 / 自动化测试可以直接读，不必猜 canvas.width（位图随层级变化）
+  canvas.dataset.imageWidth = String(tileset.imageWidth);
+  canvas.dataset.imageHeight = String(tileset.imageHeight);
+  canvas.dataset.manifest = tileset.manifestUrl;
+  canvas.dataset.tilesBase = tileset.baseUrl;
+}
+
+/**
+ * 瓦片底图的世界范围 = manifest 的 worldBlockRange（level 0 的 1 像素 = 1 方块）。
+ * 也就是说瓦片维度不走 calibration：manifest 才是唯一真相，config 里的 calibration 只作说明。
+ */
+function calibrationFromTileset(tileset) {
+  const { xMin, xMax, zMin, zMax } = tileset.bounds;
+  return {
+    xMin,
+    xMax,
+    zMin,
+    zMax,
+    flipZ: false,
+    calibrated: true,
+    note: `瓦片底图 · 世界范围来自 ${tileset.manifestUrl}（1 像素 = 1 方块）`,
+    source: 'tiles',
+  };
+}
+
+/** 当前瓦片层（调试 / 测试用） */
+function tileStats() {
+  return tileLayer ? tileLayer.stats : null;
 }
 
 function pushDataToSidebar() {
@@ -897,6 +1007,12 @@ function resolveCalibration(dim, imageSize) {
 function applyCalibration(calibration) {
   const size = state.imageSize;
   if (!size || !calibration) return;
+  // 瓦片维度：世界范围由 manifest 的 worldBlockRange 决定，改 calibration 只会让瓦片与路径点错位
+  if (state.tileset) {
+    console.warn('[app] 当前维度使用瓦片底图，世界范围由 manifest 决定，applyCalibration 已忽略');
+    toast('瓦片底图的世界范围来自 manifest，无需校准');
+    return;
+  }
   const proj = buildProjection(calibration, size);
   if (!proj) {
     toast('校准参数无效，请检查四个边界值');
@@ -1330,6 +1446,14 @@ window.__mapApp = {
   setMeasureActive,
   clearMeasure,
   undoMeasurePoint,
+  /** 瓦片底图调试口：只读快照，不暴露实例（避免测试误改内部状态） */
+  tiles: () => tileStats(),
+  get tileset() {
+    return state.tileset;
+  },
+  get tileLayer() {
+    return tileLayer;
+  },
   addMeasurePoint: (x, z) => {
     if (!measure) return null;
     const added = measure.addPoint({ x, z });

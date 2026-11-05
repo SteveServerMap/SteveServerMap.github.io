@@ -133,7 +133,12 @@ function normalizeDimension(rawDim, index, warnings) {
   const name = str(rawDim.name) || `维度 ${index + 1}`;
   const id = str(rawDim.id) || slugify(name) || `dim-${index + 1}`;
   const image = str(rawDim.image);
-  if (!image) warnings.push(`维度「${name}」缺少 image 字段，无法显示基底图`);
+  const tiles = normalizeTiles(rawDim.tiles, warnings, name);
+  if (!image && !tiles) {
+    warnings.push(`维度「${name}」既没有 image 也没有 tiles，无法显示底图`);
+  } else if (!image) {
+    warnings.push(`维度「${name}」使用瓦片底图，没有配置 image（回退底图）`);
+  }
 
   const groups = normalizeGroups(rawDim.groups, warnings, name);
   const groupIds = new Set(groups.map((g) => g.id));
@@ -143,6 +148,8 @@ function normalizeDimension(rawDim, index, warnings) {
     id,
     name,
     image,
+    // 配了 tiles 就用瓦片底图；image + calibration 只在没有 tiles（或瓦片加载失败）时生效
+    tiles,
     calibration: normalizeCalibrationRaw(rawDim.calibration, warnings, name),
     groups,
     waypoints,
@@ -150,6 +157,26 @@ function normalizeDimension(rawDim, index, warnings) {
     order: index,
   };
 }
+
+/**
+ * 瓦片底图配置的规范化。
+ * 支持两种写法：
+ *   "tiles": { "manifest": "tiles/manifest.json" }
+ *   "tiles": "tiles/manifest.json"
+ * 没有 manifest 字段 → 视为没配置（继续走单张 image）。
+ */
+function normalizeTiles(raw, warnings, dimName) {
+  if (raw === undefined || raw === null) return null;
+  const manifest = typeof raw === 'string'
+    ? str(raw)
+    : (isObject(raw) ? str(raw.manifest) : '');
+  if (!manifest) {
+    warnings.push(`维度「${dimName}」的 tiles 缺少 manifest 字段，已忽略（继续使用 image）`);
+    return null;
+  }
+  return { manifest };
+}
+
 
 function normalizeGroups(rawGroups, warnings, dimName) {
   const list = [];

@@ -45,7 +45,19 @@
         "properties": {
           "id": { "type": "string", "description": "维度 id，用于 URL 与内部引用，如 overworld / nether / the_end" },
           "name": { "type": "string", "description": "显示名称，如 主世界" },
-          "image": { "type": "string", "description": "基底图片路径（相对站点根目录）" },
+          "image": { "type": "string", "description": "基底图片路径（相对站点根目录）。配置了 tiles 时只作为瓦片加载失败的回退底图。" },
+          "tiles": {
+            "type": ["object", "string"],
+            "description": "瓦片底图。配置后该维度用瓦片渲染（<canvas>），世界范围以 manifest 的 worldBlockRange 为准，calibration 不再参与换算。不配则维持「单张 image + calibration」。",
+            "additionalProperties": true,
+            "properties": {
+              "manifest": {
+                "type": "string",
+                "description": "瓦片清单路径，相对站点根目录，如 tiles/manifest.json；瓦片文件按 <manifest 目录>/tiles/<level>/<x>_<y>.png 读取"
+              }
+            },
+            "required": ["manifest"]
+          },
           "calibration": {
             "type": "object",
             "description": "画幅校准：把图片像素映射到世界坐标。画幅变化后只需改这里。",

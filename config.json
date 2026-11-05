@@ -17,14 +17,17 @@
       "id": "overworld",
       "name": "主世界",
       "image": "主世界.png",
+      "tiles": {
+        "manifest": "tiles/manifest.json"
+      },
       "calibration": {
         "calibrated": true,
-        "xMin": -2048.5,
-        "xMax": 1535.5,
-        "zMin": -3584.375,
-        "zMax": 1535.625,
+        "xMin": -2048,
+        "xMax": 2048,
+        "zMin": -3584,
+        "zMax": 1536,
         "flipZ": false,
-        "note": "按世界原点 (0,0) · 每方块 1 像素 · 图片 3584×5120px · 由配置工具生成"
+        "note": "使用瓦片底图：世界范围以 tiles/manifest.json 的 worldBlockRange 为准（1 像素 = 1 方块）；image 仅在瓦片加载失败时兜底"
       },
       "groups": [
         {

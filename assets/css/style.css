@@ -1317,6 +1317,15 @@ body[data-sidebar="collapsed"] .sidebar,
   image-rendering: pixelated;
 }
 
+/* 瓦片底图：与 #map-image 同一套定位语义（绝对贴在舞台左上角，按原始像素布局）。
+   image-rendering 由 tiles.js 按「放大 / 缩小」实时切换，这里只给兜底值。 */
+.map-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  image-rendering: auto;
+}
+
 /* 覆盖层：不随 transform 缩放，自身不吃鼠标事件 */
 .map-overlay {
   position: absolute;

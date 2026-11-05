@@ -1,0 +1,169 @@
+{
+  "generatedAt": "2026-11-05T15:40:33.757Z",
+  "tileSize": 256,
+  "source": "xaero-export",
+  "levels": [
+    {
+      "level": 0,
+      "minX": 0,
+      "maxX": 15,
+      "minZ": 0,
+      "maxZ": 19,
+      "cols": 16,
+      "rows": 20,
+      "blocksPerPixel": 1,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 1,
+      "minX": 0,
+      "maxX": 7,
+      "minZ": 0,
+      "maxZ": 9,
+      "cols": 8,
+      "rows": 10,
+      "blocksPerPixel": 2,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 2,
+      "minX": 0,
+      "maxX": 3,
+      "minZ": 0,
+      "maxZ": 4,
+      "cols": 4,
+      "rows": 5,
+      "blocksPerPixel": 4,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 3,
+      "minX": 0,
+      "maxX": 1,
+      "minZ": 0,
+      "maxZ": 2,
+      "cols": 2,
+      "rows": 3,
+      "blocksPerPixel": 8,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 4,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 1,
+      "cols": 1,
+      "rows": 2,
+      "blocksPerPixel": 16,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 5,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 32,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 6,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 64,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 7,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 128,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 8,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 256,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 9,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 512,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 10,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 1024,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 11,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 2048,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    },
+    {
+      "level": 12,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 4096,
+      "originBlockX": -2048,
+      "originBlockZ": -3584
+    }
+  ],
+  "worldBlockRange": {
+    "xMin": -2048,
+    "xMax": 2048,
+    "zMin": -3584,
+    "zMax": 1536
+  }
+}

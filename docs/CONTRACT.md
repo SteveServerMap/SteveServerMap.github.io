@@ -7,11 +7,13 @@
 index.html                 页面骨架（Lead 拥有，其他人不要修改）
 config.json                用户配置文件（Lead 拥有）
 config.schema.json         配置的 JSON Schema（Lead 拥有）
-主世界.png / 下界.png / 末地.png  基底图片
+主世界.png / 下界.png / 末地.png  基底图片（单张模式；配了 tiles 的维度只作兜底）
+tiles/manifest.json + tiles/tiles/<level>/<x>_<y>.png  瓦片底图（见 §10）
 assets/css/style.css       style-dev 拥有
 assets/js/config.js        config/normalize（Lead 拥有）
 assets/js/coords.js        viewer-dev 拥有（纯函数，无 DOM）
 assets/js/viewer.js        viewer-dev 拥有（平移缩放引擎）
+assets/js/tiles.js         瓦片底图（manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存）
 assets/js/markers.js       ui-dev 拥有（标记图层）
 assets/js/sidebar.js       ui-dev 拥有（左侧路径点菜单）
 assets/js/app.js           Lead 拥有（装配所有模块）
@@ -43,6 +45,12 @@ tests/                     qa-dev 拥有
 `{"pixelsPerBlock": 1, "originX": 0, "originZ": 0}`，其中 origin 是图片左上角对应的世界坐标。
 
 映射公式（`px,py` 为图片像素，左上为 0,0；`W,H` 为图片原始像素宽高）：
+
+> **第二种投影：瓦片底图（§10）**。维度配了 `tiles` 时不再用 `calibration`：
+> 世界范围直接取 `manifest.worldBlockRange`，且 level 0 的 **1 像素 = 1 方块**，
+> 于是 `W = xMax - xMin`、`H = zMax - zMin`，代入上面的公式正好等价于
+> `px = x - xMin`、`py = z - zMin`。`coords.createProjection` 一行都不用改，
+> `app.js` 只是换了一组参数（见 §10.2）。
 
 ```
 px = (x - xMin) / (xMax - xMin) * W
@@ -88,7 +96,9 @@ export function distanceXZ(a, b)
 只操作 `index.html` 里已存在的节点，不创建顶层 DOM：
 
 - `#viewport.map-viewport`：裁剪容器（`overflow:hidden`、`position:relative`）
-- `#stage.map-stage`：被 transform 的图层（内含 `<img id="map-image">`）
+- `#stage.map-stage`：被 transform 的图层，内含**当前底图元素**（二选一，另一个 `hidden`）：
+  - `<img id="map-image" class="map-image">`：单张图片维度（`setImage(url)`）；
+  - `<canvas id="map-canvas" class="map-image map-canvas">`：瓦片维度（`setRasterBase({width,height})`，内容由 `tiles.js` 画，见 §10）。
 - `#overlay.map-overlay`：屏幕坐标覆盖层（标记、网格、准星），**不随 transform 缩放**
 
 变换语义：图片像素 `px,py` → 视口 CSS 像素 `sx = tx + px*scale`，`sy = ty + py*scale`。
@@ -104,8 +114,13 @@ export class MapView {
     minScale = 0.05, maxScale = 8,
   })
 
-  /** 载入基底图。resolves 后 getImageSize() 可用；失败 reject */
+  /** 载入基底图（单张图片）。resolves 后 getImageSize() 可用；失败 reject。
+   *  调用后底图元素切回 <img id="map-image"> */
   setImage(url)                        // -> Promise<{width,height}>
+  /** 直接把底图设为「已知逻辑尺寸的栅格」（瓦片 <canvas>）；不加载图片 */
+  setRasterBase({ width, height, element? })  // -> Promise<{width,height}>
+  /** 切换当前底图元素（img / canvas），尺寸与样式语义不变 */
+  setBaseLayer(el)                     // -> Element|null
   getImageSize()                       // -> {width, height} | null
 
   setProjection(projection)            // 保存当前投影，供 getWorldAt 使用
@@ -301,7 +316,8 @@ export class MeasureLayer {
     {
       "id": "overworld",
       "name": "主世界",
-      "image": "主世界.png",
+      "image": "主世界.png",              // 单张模式用；配了 tiles 时只作兜底
+      "tiles": { "manifest": "tiles/manifest.json" },   // 可选，见 §10
       "calibration": { "calibrated": false, "xMin": -1792, "xMax": 1792, "zMin": -2560, "zMax": 2560, "note": "…" },
       "groups": [
         { "id": "base", "name": "据点", "color": "#5ad26f", "visible": true }
@@ -316,7 +332,8 @@ export class MeasureLayer {
 }
 ```
 
-- 规范化后的维度对象：`{ id, name, image, calibration, groups, waypoints, valid }`
+- 规范化后的维度对象：`{ id, name, image, tiles, calibration, groups, waypoints, order }`
+  - `tiles` 为 `null`（未配置）或 `{ manifest: "tiles/manifest.json" }`（也接受直接写字符串）。
 - 规范化后的路径点：`{ id, name, x, y, z, group, icon, color, label, description, url }`
   - `y` 可省略（null）；`group` 缺省落到 `default` 分组；`icon` 缺省 `pin`；`color` 缺省取分组色。
 - `label`：`always` | `hover` | `never`（缺省跟随全局 `ui.labelMode`）。
