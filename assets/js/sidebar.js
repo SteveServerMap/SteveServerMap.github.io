@@ -108,6 +108,19 @@ export class Sidebar {
     this._loading = false;
     this._collapsed = document.body ? document.body.dataset.sidebar === 'collapsed' : false;
 
+    /** 路径点列表里被折叠的分组：Set<"dimId::groupId">，持久化到 localStorage */
+    this._collapsedGroups = new Set();
+    this._collapsedGroupsKey = 'ssm.collapsedGroups.v1';
+    try {
+      const raw = localStorage.getItem(this._collapsedGroupsKey);
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) this._collapsedGroups = new Set(list.map(String));
+      }
+    } catch {
+      /* 忽略：隐私模式下 localStorage 可能不可用 */
+    }
+
     this._bindEvents();
     this._syncSearchClear();
     this._updateSortButton();
@@ -393,6 +406,33 @@ export class Sidebar {
     this._on(this.el.waypointList, 'pointerover', (event) => this._handleItemPointerOver(event));
     this._on(this.el.waypointList, 'pointerout', (event) => this._handleItemPointerOut(event));
 
+    /* 路径点列表：点分组头折叠 / 点眼睛切换显隐 */
+    this._on(this.el.waypointList, 'click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const head = target.closest('.wp-group-head');
+      if (!head) return;
+      const actionEl = target.closest('[data-act="toggle"]');
+      if (actionEl) {
+        event.preventDefault();
+        event.stopPropagation();
+        this._toggleGroup(head.dataset.group);
+        return;
+      }
+      event.preventDefault();
+      this._toggleGroupCollapse(head.dataset.group);
+    });
+    this._on(this.el.waypointList, 'keydown', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const head = target.closest('.wp-group-head');
+      if (!head) return;
+      if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        this._toggleGroupCollapse(head.dataset.group);
+      }
+    });
+
     this._on(this.el.groupList, 'click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -666,6 +706,29 @@ export class Sidebar {
     }
   }
 
+  /** 折叠状态键：维度 + 分组（同一分组 id 在不同维度下互不影响） */
+  _collapsedKey(groupId) {
+    const dim = this._currentDimension();
+    const dimId = dim && dim.id != null ? String(dim.id) : 'default';
+    return dimId + '::' + groupId;
+  }
+
+  _isGroupCollapsed(groupId) {
+    return this._collapsedGroups.has(this._collapsedKey(groupId));
+  }
+
+  _toggleGroupCollapse(groupId) {
+    const key = this._collapsedKey(groupId);
+    if (this._collapsedGroups.has(key)) this._collapsedGroups.delete(key);
+    else this._collapsedGroups.add(key);
+    try {
+      localStorage.setItem(this._collapsedGroupsKey, JSON.stringify([...this._collapsedGroups]));
+    } catch {
+      /* 忽略 */
+    }
+    this._renderList();
+  }
+
   _renderDimensionMeta() {
     const box = this.el.dimensionMeta;
     if (!box) return;
@@ -752,12 +815,91 @@ export class Sidebar {
     list.textContent = '';
     const fragment = document.createDocumentFragment();
     let visibleCount = 0;
+
+    // 按分组归拢（顺序跟随分组定义），用可折叠的分组头包起来 —— 与配置工具的左树一致
+    const groups = this._effectiveGroups();
+    const order = new Map(groups.map((group, index) => [String(group.id), index]));
+    const buckets = new Map();
     for (const waypoint of sorted) {
-      const item = this._createListItem(waypoint);
-      if (this._isGroupVisible(waypoint.group)) visibleCount += 1;
-      fragment.appendChild(item);
+      const groupId = String(waypoint.group || 'default');
+      if (!buckets.has(groupId)) buckets.set(groupId, []);
+      buckets.get(groupId).push(waypoint);
+    }
+    const groupIds = [...buckets.keys()].sort((a, b) => {
+      const ia = order.has(a) ? order.get(a) : Number.MAX_SAFE_INTEGER;
+      const ib = order.has(b) ? order.get(b) : Number.MAX_SAFE_INTEGER;
+      return ia === ib ? a.localeCompare(b, 'zh-CN') : ia - ib;
+    });
+
+    for (const groupId of groupIds) {
+      const items = buckets.get(groupId);
+      const group = this._groupById.get(groupId) || null;
+      // 搜索时强制展开，否则用户搜到了却看不见
+      const searching = !!this._query;
+      const collapsed = !searching && this._isGroupCollapsed(groupId);
+      const groupVisible = this._isGroupVisible(groupId);
+
+      const section = document.createElement('section');
+      section.className = 'wp-group';
+      section.dataset.group = groupId;
+      section.classList.toggle('is-collapsed', collapsed);
+      section.classList.toggle('is-off', !groupVisible);
+
+      const head = document.createElement('div');
+      head.className = 'wp-group-head';
+      head.dataset.act = 'toggle-collapse';
+      head.dataset.group = groupId;
+      head.setAttribute('role', 'button');
+      head.tabIndex = 0;
+      head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      head.title = collapsed ? '展开该分组的路径点' : '收起该分组的路径点';
+
+      const caret = document.createElement('span');
+      caret.className = 'wp-group-caret';
+      caret.setAttribute('aria-hidden', 'true');
+      caret.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>';
+
+      const dot = document.createElement('span');
+      dot.className = 'group-dot';
+      const color = (group && typeof group.color === 'string' && group.color) || DEFAULT_COLOR;
+      dot.style.setProperty('--group-color', color);
+      dot.style.background = color;
+
+      const name = document.createElement('span');
+      name.className = 'wp-group-name';
+      name.textContent = (group && (group.name || group.id)) || (groupId === 'default' ? '默认' : groupId);
+
+      const count = document.createElement('span');
+      count.className = 'wp-group-count';
+      count.textContent = String(items.length);
+
+      const eye = document.createElement('button');
+      eye.type = 'button';
+      eye.className = 'group-eye icon-btn tiny';
+      eye.dataset.act = 'toggle';
+      eye.setAttribute('aria-pressed', groupVisible ? 'true' : 'false');
+      eye.setAttribute('aria-label', (groupVisible ? '隐藏' : '显示') + '分组「' + name.textContent + '」');
+      eye.title = groupVisible ? '隐藏该分组' : '显示该分组';
+      eye.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-' + (groupVisible ? 'eye' : 'eye-off') + '"></use></svg>';
+
+      head.append(caret, dot, name, count, eye);
+
+      const body = document.createElement('div');
+      body.className = 'wp-group-items';
+      body.setAttribute('role', 'group');
+      for (const waypoint of items) {
+        const item = this._createListItem(waypoint);
+        if (groupVisible) visibleCount += 1;
+        body.appendChild(item);
+      }
+
+      section.append(head, body);
+      fragment.appendChild(section);
     }
     list.appendChild(fragment);
+
+    this._lastRenderedIds = sorted.map((waypoint) => String(waypoint.id));
+    this._visibleCount = visibleCount;
 
     this._lastRenderedIds = sorted.map((waypoint) => String(waypoint.id));
     this._visibleCount = visibleCount;

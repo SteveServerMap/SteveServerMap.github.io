@@ -1361,7 +1361,7 @@ async function main() {
   });
 
   /* ---------------- 4b. 配置驱动 + 画幅变化后重新校准 ---------------- */
-  await checkIfReady('data.config', '侧栏列表 / 分组完全由 config.json 驱动（名称、顺序、数量一致）', async () => {
+  await checkIfReady('data.config', '侧栏列表按分组分区渲染，组内顺序与 config 一致（名称、数量、归属一致）', async () => {
     await ensureSidebarOpen();
     await resetView();
     const dimension = dimensionById('overworld');
@@ -1385,10 +1385,50 @@ async function main() {
         throw new Error(`列表项 ${waypoint.id} 名称「${item.name}」，config 里是「${waypoint.name}」`);
       }
     }
-    if (actualIds.join(',') !== expectedIds.join(',')) {
-      throw new Error(
-        `列表顺序与 config 不一致：实际 [${actualIds.join(', ')}]，期望 [${expectedIds.join(', ')}]`,
-      );
+    // 列表现在按分组分区渲染（与配置工具左树一致）：校验「分区归属 + 每组内顺序」，
+    // 而不是全局扁平顺序 —— 全局顺序来自分组定义，不再是 config 的数组顺序。
+    const sections = await page.evalFn(() =>
+      [...document.querySelectorAll('#waypoint-list .wp-group')].map((section) => ({
+        group: section.dataset.group,
+        collapsed: section.classList.contains('is-collapsed'),
+        items: [...section.querySelectorAll('[data-id]')].map((el) => el.dataset.id),
+      })),
+    );
+    if (!sections || !sections.length) throw new Error('路径点列表没有按分组渲染（找不到 .wp-group）');
+
+    const sectionGroupOf = new Map();
+    for (const section of sections) {
+      for (const id of section.items) {
+        if (sectionGroupOf.has(id)) throw new Error(`路径点 ${id} 同时出现在多个分组分区里`);
+        sectionGroupOf.set(id, section.group);
+      }
+    }
+    const knownGroupIds = new Set([...dimension.groups.map((group) => String(group.id)), 'default']);
+    for (const section of sections) {
+      if (!knownGroupIds.has(String(section.group))) {
+        throw new Error(`列表出现了 config 里没有的分组「${section.group}」`);
+      }
+    }
+
+    // 每个分组内：成员集合与 config 一致，且内部顺序与 config 中出现顺序一致
+    for (const group of [...dimension.groups, { id: 'default' }]) {
+      const groupId = String(group.id);
+      const expectedInGroup = dimension.waypoints
+        .filter((waypoint) => String(waypoint.group || 'default') === groupId)
+        .map((waypoint) => String(waypoint.id));
+      if (!expectedInGroup.length) continue;
+      const section = sections.find((entry) => String(entry.group) === groupId);
+      if (!section) throw new Error(`列表缺少分组「${groupId}」的分区（应该有 ${expectedInGroup.length} 个路径点）`);
+      const actualInGroup = section.items.map(String);
+      const missing = expectedInGroup.filter((id) => !actualInGroup.includes(id));
+      if (missing.length) throw new Error(`分组「${groupId}」缺少路径点：${missing.join(', ')}`);
+      const actualOrder = expectedInGroup.filter((id) => actualInGroup.includes(id));
+      const ordered = actualInGroup.filter((id) => expectedInGroup.includes(id));
+      if (ordered.join(',') !== actualOrder.join(',')) {
+        throw new Error(
+          `分组「${groupId}」内部顺序与 config 不一致：实际 [${ordered.join(', ')}]，期望 [${actualOrder.join(', ')}]`,
+        );
+      }
     }
 
     const groups = await page.evalFn(GROUP_STATS);

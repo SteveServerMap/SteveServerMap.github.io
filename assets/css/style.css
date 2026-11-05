@@ -3073,3 +3073,92 @@ body.is-cal-picking .map-viewport,
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* ==========================================================================
+   路径点列表里的分组折叠（与配置工具左树一致）
+   ========================================================================== */
+
+.wp-group {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.wp-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text, #e8efe8);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.wp-group-head:hover {
+  background: rgba(90, 210, 111, 0.08);
+  border-color: rgba(90, 210, 111, 0.25);
+}
+
+.wp-group-head:focus-visible {
+  outline: 2px solid var(--accent, #5ad26f);
+  outline-offset: 1px;
+}
+
+.wp-group-caret {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted, #93a394);
+  transition: transform 0.15s ease;
+}
+
+.wp-group-caret .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.wp-group.is-collapsed .wp-group-caret {
+  transform: rotate(-90deg);
+}
+
+.wp-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.wp-group-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted, #93a394);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.wp-group.is-off .wp-group-name,
+.wp-group.is-off .wp-group-count {
+  opacity: 0.55;
+}
+
+.wp-group-items {
+  display: block;
+  padding-left: 10px;
+  margin-top: 2px;
+}
+
+.wp-group.is-collapsed .wp-group-items {
+  display: none;
+}

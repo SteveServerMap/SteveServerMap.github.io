@@ -201,6 +201,16 @@ sidebar.js 负责绑定它们。
 
 ---
 
+### 5.x 侧栏路径点列表的分组折叠
+
+- `#waypoint-list` 的内容按「分组」分区渲染：每个分组一个 `section.wp-group[data-group]`，
+  里面依次是 `div.wp-group-head`（箭头 + 色块 + 名称 + 数量 + 眼睛按钮）与 `div.wp-group-items`（组内路径点）。
+- 点分组头 = 折叠/展开（`is-collapsed`，`aria-expanded` 同步；折叠时组内节点仍在 DOM 里，只是 `display:none`）。
+- 分组头里的眼睛按钮 = 切换该分组显隐，与 `#group-list` 的分组面板联动（两处的 `aria-pressed` 保持一致）。
+- 折叠状态按「维度 + 分组」记在 `localStorage['ssm.collapsedGroups.v1']`（元素形如 `overworld::base`），刷新后保持。
+- 搜索（`#waypoint-search`）时强制展开所有分组，避免「搜到了却看不见」；清空搜索后恢复用户之前的折叠状态。
+- 分组顺序跟随 `config.json` 里 `dimensions[].groups` 的定义顺序，组内顺序跟随 `waypoints` 数组顺序。
+
 ## 6. `assets/js/calibrate.js`（style-dev）—— 校准向导
 
 ```js
