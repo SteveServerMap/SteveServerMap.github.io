@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-11-05T20:42:25.782Z",
+  "tileSize": 256,
+  "source": "stitched-png",
+  "levels": [
+    {
+      "level": 0,
+      "minX": 0,
+      "maxX": 3,
+      "minZ": 0,
+      "maxZ": 3,
+      "cols": 4,
+      "rows": 4,
+      "blocksPerPixel": 1,
+      "originBlockX": -512,
+      "originBlockZ": -512
+    },
+    {
+      "level": 1,
+      "minX": 0,
+      "maxX": 1,
+      "minZ": 0,
+      "maxZ": 1,
+      "cols": 2,
+      "rows": 2,
+      "blocksPerPixel": 2,
+      "originBlockX": -512,
+      "originBlockZ": -512
+    },
+    {
+      "level": 2,
+      "minX": 0,
+      "maxX": 0,
+      "minZ": 0,
+      "maxZ": 0,
+      "cols": 1,
+      "rows": 1,
+      "blocksPerPixel": 4,
+      "originBlockX": -512,
+      "originBlockZ": -512
+    }
+  ],
+  "worldBlockRange": {
+    "xMin": -512,
+    "xMax": 512,
+    "zMin": -512,
+    "zMax": 512
+  },
+  "stats": {
+    "kind": "png",
+    "images": 1,
+    "pixels": 1048576,
+    "level0Tiles": 16
+  }
+}

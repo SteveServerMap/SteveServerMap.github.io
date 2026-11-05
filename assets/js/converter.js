@@ -97,7 +97,11 @@ export class ConverterPanel {
   /**
    * 打开 / 收起面板。
    * @param {boolean} open
-   * @param {{prefill?: {x: number, z: number}}} [opts] 打开时若输入为空则预填
+   * @param {{
+   *   prefill?: {x: number, z: number},
+   *   direction?: 'ow2n' | 'n2ow',
+   * }} [opts] 打开时若输入为空则预填；预填成功时方向跟随 direction
+   *          （预填值取自哪个维度，就该按哪个维度的方向解释）
    */
   setOpen(open, opts = {}) {
     this._open = open === true;
@@ -106,12 +110,17 @@ export class ConverterPanel {
       const prefill = opts.prefill;
       const xEl = this.el.x;
       const zEl = this.el.z;
+      let applied = false;
       if (
         prefill && Number.isFinite(prefill.x) && Number.isFinite(prefill.z) &&
         xEl && zEl && !xEl.value && !zEl.value
       ) {
         xEl.value = String(prefill.x);
         zEl.value = String(prefill.z);
+        applied = true;
+      }
+      if (applied && (opts.direction === 'ow2n' || opts.direction === 'n2ow')) {
+        this._setDirection(opts.direction);
       }
       this._recompute();
     }

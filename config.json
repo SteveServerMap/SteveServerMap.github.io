@@ -183,14 +183,17 @@
       "id": "nether",
       "name": "下界",
       "image": "下界.png",
+      "tiles": {
+        "manifest": "tiles/nether/manifest.json"
+      },
       "calibration": {
-        "calibrated": false,
+        "calibrated": true,
         "xMin": -1024,
         "xMax": 1024,
         "zMin": -1024,
         "zMax": 1024,
         "flipZ": false,
-        "note": "下界坐标通常是主世界的 1/8。上传 下界.png 后重新校准。"
+        "note": "使用瓦片底图：世界范围以 tiles/nether/manifest.json 的 worldBlockRange 为准（1 像素 = 1 方块）；image 仅在瓦片加载失败时兜底。下界坐标通常是主世界的 1/8"
       },
       "groups": [
         {
@@ -206,14 +209,17 @@
       "id": "the_end",
       "name": "末地",
       "image": "末地.png",
+      "tiles": {
+        "manifest": "tiles/the_end/manifest.json"
+      },
       "calibration": {
-        "calibrated": false,
+        "calibrated": true,
         "xMin": -512,
         "xMax": 512,
         "zMin": -512,
         "zMax": 512,
         "flipZ": false,
-        "note": "上传 末地.png 后重新校准。"
+        "note": "使用瓦片底图：世界范围以 tiles/the_end/manifest.json 的 worldBlockRange 为准（1 像素 = 1 方块）；image 仅在瓦片加载失败时兜底"
       },
       "groups": [
         {

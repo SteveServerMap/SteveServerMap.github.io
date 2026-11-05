@@ -2,6 +2,38 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 下界与末地切换为瓦片底图（2026-11-06）
+
+- 变更：`config.json` 给 `nether`、`the_end` 补上 `tiles`（`tiles/nether/manifest.json`、`tiles/the_end/manifest.json`），
+  站点三个维度全部走瓦片底图；单张 PNG（`下界.png` / `末地.png`）仅作瓦片加载失败时的兜底。
+- 数据源（用户选定「用现有 PNG 直接切」）：
+  - 下界：`下界.png` 2048×2048，1 像素 = 1 方块，直切 → 8×8 块 level 0（4 层），世界范围 X/Z ±1024；
+  - 末地：`末地.png` 2048×2048，2 像素 = 1 方块，`--scale=0.5` 降采样后切 → 4×4 块 level 0（3 层），世界范围 X/Z ±512。
+- 配套：配置仓库新增 `tools/png-to-tiles.mjs`（整图 → 瓦片 + manifest，`--x-min/--z-min/--scale/--tile/--out`），
+  契约与 `xaero-tiles.mjs` 一致（grid-halving 金字塔、worldBlockRange 向外补齐到瓦片整数倍）；
+  新增 `tests/png-to-tiles.test.mjs` 3 项（直切 / 降采样 / 非法参数，含站点 `parseManifest` 真实契约校验）。
+- 回归：
+  - 站点单测 **69/69**、`smoke.mjs` **34/34**（`dim.switch` 依次切下界/末地并校验底图来源为各自 manifest）；
+  - 配置仓库 `xaero-tiles.test.mjs` + `png-to-tiles.test.mjs` **6/6**。
+
+## 换算面板：方向自适应 + 画幅外定位提示（2026-11-06）
+
+- 现象（使用反馈，非代码 bug）：双向换算逻辑一直正确，但两个场景让人误以为「只有主世界→下界能用」：
+  1. 在下界地图上打开面板，预填的是下界坐标，默认方向却是 ÷8；
+  2. 「下界 → 主世界」×8 的结果几乎必然超出主世界地图画幅（下界 ±1024 × 8 = ±8192，主世界图只有 X ±2048），
+     点「定位」会静默跳到地图外的空白区域。
+- 修复：
+  1. `ConverterPanel.setOpen()` 增加 `direction` 参数：预填实际生效时方向跟随（预填值取自哪个维度，就按哪个维度解释）；
+     `app.js` 打开面板时按当前维度传方向（下界 → `n2ow`，主世界 → `ow2n`），其他维度（末地）不预填；
+     用户已输入的值不会被重新解释（方向只在预填生效时切换）。
+  2. `app.js` 的「定位」回调先检查目标是否在当前地图画幅（`projection.xMin..xMax / zMin..zMax`）内，
+     画幅外 toast「目标坐标 (x, z) 不在当前地图画幅内，未定位」并中止，不再静默跳空白区。
+- 回归：
+  - `tests/converter.test.mjs` 6/6（纯函数不变）；
+  - `tests/smoke.mjs` 新增 §6e 三项：`convert.directions`（双向换算 + 画幅内定位到 640,640）、
+    `convert.prefill`（下界维度打开自动 ×8 并预填）、`convert.oob`（画幅外定位 toast 且视野不动）；
+  - 全量 `smoke.mjs` **34/34**、`static-checks.mjs` **30/30**、`app-regressions` **16/16**。
+
 ## 换算工具 + 瓦片更新日期徽标（2026-11-06）
 
 - 新增 `assets/js/converter.js`：主世界 ↔ 下界坐标换算（÷8 / ×8，`Math.round`，负数一半向零取整，

@@ -702,7 +702,18 @@ function initConverter() {
   if (!panelEl) return;
   converter = new ConverterPanel(panelEl, {
     getCenter: worldAtViewCenter,
-    onLocate: (x, z) => gotoWorld(x, z, { animate: true }),
+    onLocate: (x, z) => {
+      const proj = state.projection;
+      if (proj && proj.isValid) {
+        const within =
+          x >= proj.xMin && x <= proj.xMax && z >= proj.zMin && z <= proj.zMax;
+        if (!within) {
+          toast(`目标坐标 (${x}, ${z}) 不在当前地图画幅内，未定位`);
+          return;
+        }
+      }
+      gotoWorld(x, z, { animate: true });
+    },
     onCopy: () => toast('已复制换算结果'),
   });
   const btn = $('btn-convert');
@@ -710,10 +721,25 @@ function initConverter() {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       const next = !converter.isOpen();
-      converter.setOpen(next, next ? { prefill: worldAtViewCenter() || undefined } : {});
+      const dimId = state.dimension && String(state.dimension.id);
+      // 预填值取当前视野中心（当前维度坐标），方向必须与之一致：
+      // 下界视图 → ×8；主世界视图 → ÷8；其他维度不预填（换算只在主世界/下界间有意义）
+      const direction = dimId === 'nether' ? 'n2ow' : 'ow2n';
+      const prefillable = dimId === 'overworld' || dimId === 'nether';
+      converter.setOpen(next, next ? {
+        prefill: prefillable ? worldAtViewCenter() || undefined : undefined,
+        direction,
+      } : {});
       btn.setAttribute('aria-pressed', next ? 'true' : 'false');
       btn.classList.toggle('is-active', next);
-      if (next) toast('换算：主世界 ÷8 ↔ 下界 ×8，打开时已预填当前视野中心', 'info', 3200);
+      if (next) {
+        toast(
+          prefillable
+            ? '换算：主世界 ÷8 ↔ 下界 ×8，打开时已预填当前视野中心'
+            : '换算：主世界 ÷8 ↔ 下界 ×8（当前维度不参与换算，未预填）',
+          'info', 3200,
+        );
+      }
     });
   }
 }

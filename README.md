@@ -7,7 +7,7 @@ Minecraft 服务器的**离线地图站点**：一张导出的地图 PNG（或�
 **线上地址：<https://steveservermap.github.io/>**（部署在 GitHub Pages，`main` 分支根目录，详见 [第 8 节](#8-部署到-github-pages)）
 
 - 🗺️ **多维度**：主世界 / 下界 / 末地，一键切换
-- 🧱 **两种底图**：主世界用 **瓦片底图**（`tiles/`，按缩放自动切层级、只加载视口内的瓦片）；其他维度仍是「单张 PNG + `calibration`」。两种模式对路径点、测距、搜索等上层功能完全一致
+- 🧱 **瓦片底图**：三个维度都用瓦片（`tiles/`，按缩放自动切层级、只加载视口内的瓦片）；单张 PNG + `calibration` 作为瓦片加载失败时的兜底，对路径点、测距、搜索等上层功能完全一致
 - 📍 **路径点由配置驱动**：加一个点 = 在 `config.json` 里加几行
 - 🎯 **画幅变了也不丢点**：路径点存的是**世界坐标**，重新导出地图后重新校准一次，所有点自动对回（本项目的核心设计）
 - 🔍 分组显隐与折叠、搜索、标签模式、坐标网格、比例尺、坐标读数、链接分享
@@ -88,12 +88,15 @@ SteveServerMap.github.io/
 ├── index.html                 页面骨架（唯一入口）
 ├── config.json                ★ 你要编辑的配置文件：维度 / 画幅 / 分组 / 路径点
 ├── config.schema.json         配置的 JSON Schema（供编辑器补全与校验）
-├── tiles/                     ★ 主世界的瓦片底图（manifest + 各层级 PNG，可选）
-│   ├── manifest.json          瓦片清单：层级、世界范围、每层瓦片编号范围
-│   └── tiles/<level>/<x>_<y>.png  瓦片本体（列_行，缺文件 = 该处全透明，属正常）
-├── 主世界.png                 单张基底图（主世界的兜底 / 其他维度仍用它）
-├── 下界.png                   基底地图（下界，当前是占位图）
-├── 末地.png                   基底地图（末地，当前是占位图）
+├── tiles/                     ★ 三个维度的瓦片底图（manifest + 各层级 PNG，可选）
+│   ├── overworld/             主世界：Xaero 导出图直切（16×20 → … → 1×2）
+│   │   ├── manifest.json      瓦片清单：层级、世界范围、每层瓦片编号范围
+│   │   └── tiles/<level>/<x>_<y>.png  瓦片本体（列_行，缺文件 = 该处全透明，属正常）
+│   ├── nether/                下界：下界.png 整图直切（1 像素 = 1 方块）
+│   └── the_end/               末地：末地.png 降采样 2×（原图 2 像素 = 1 方块）
+├── 主世界.png                 单张基底图（瓦片加载失败时的兜底）
+├── 下界.png                   基底地图（下界兜底）
+├── 末地.png                   基底地图（末地兜底）
 ├── serve.cmd                  Windows 一键本地预览
 ├── docs/
 │   ├── CONTRACT.md            内部接口契约（开发者用，使用者可以跳过）
@@ -462,17 +465,17 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 ## 7. 替换基底地图
 
-当前主世界走**瓦片底图**（`tiles/`），下界 / 末地仍是单张 PNG：
+三个维度都走**瓦片底图**（`tiles/`），单张 PNG 只在瓦片加载失败时兜底：
 
 | 维度 | 底图 | 说明 |
 | --- | --- | --- |
-| 主世界 | `tiles/overworld/manifest.json` + `tiles/overworld/tiles/<level>/<x>_<y>.png` | 瓦片底图；`主世界.png`（3584×5120）只在 manifest 加载失败时兜底 |
-| 下界 | `下界.png` | **占位图**，请替换成真实导出图 |
-| 末地 | `末地.png` | **占位图**，请替换成真实导出图 |
+| 主世界 | `tiles/overworld/manifest.json` + `tiles/overworld/tiles/<level>/<x>_<y>.png` | Xaero 导出图直切；`主世界.png`（3584×5120）只在 manifest 加载失败时兜底 |
+| 下界 | `tiles/nether/manifest.json` + `tiles/nether/tiles/<level>/<x>_<y>.png` | `下界.png` 整图直切（2048×2048，1 像素 = 1 方块）；`下界.png` 兜底 |
+| 末地 | `tiles/the_end/manifest.json` + `tiles/the_end/tiles/<level>/<x>_<y>.png` | `末地.png` 降采样 2×（原图 2 像素 = 1 方块）；`末地.png` 兜底 |
 
-换瓦片地图：把新的 `manifest.json` 与同目录的 `tiles/` 整体覆盖 `tiles/overworld/`，确认 `config.json` 里该维度的 `"tiles": { "manifest": "tiles/overworld/manifest.json" }` 不变即可 —— 瓦片自带世界范围，**不需要再校准**（路径点会按新 manifest 的 `worldBlockRange` 自动对回）。
+换瓦片地图：把新的 `manifest.json` 与同目录的 `tiles/` 整体覆盖 `tiles/<维度>/`，确认 `config.json` 里该维度的 `"tiles": { "manifest": "tiles/<维度>/manifest.json" }` 不变即可 —— 瓦片自带世界范围，**不需要再校准**（路径点会按新 manifest 的 `worldBlockRange` 自动对回）。
 
-> 当前瓦片由配置工具（`SteveServerMapConfig`）的「XAERO 瓦片源」生成：把导出图放进 `xaero/<维度名>/`，在工具里一键生成并保存即可，详见该仓库的 `docs/XAERO.md`。
+> 当前瓦片由配置工具（`SteveServerMapConfig`）生成：主世界走「XAERO 瓦片源」（导出图放进 `xaero/<维度名>/`，详见该仓库的 `docs/XAERO.md`）；下界 / 末地用「整图切瓦片」（`tools/png-to-tiles.mjs <整图.png> --x-min=<n> --z-min=<n> [--scale=0.5] --out=…`，适合只有拼好的整张 PNG 的场景）。
 
 两种换法，任选其一：
 
@@ -539,7 +542,7 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 | 顶栏「测量」 | 开关测距模式（点地图加点，点路径点会吸附） |
 | `Backspace` | 测距时撤销上一个测量点 |
 | `Enter` / `Esc` | 测距时结束 / 退出 |
-| 顶栏「换算」 | 主世界 ↔ 下界坐标换算面板（打开时预填当前视野中心） |
+| 顶栏「换算」 | 主世界 ↔ 下界坐标换算面板（打开时预填当前视野中心，方向自动匹配当前维度） |
 
 ### 测距怎么用
 
@@ -553,8 +556,10 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 1. 点顶栏 **「换算」** 打开面板（X / Z 自动预填当前视野中心的方块坐标）；
 2. 选方向：**主世界 → 下界**（÷8）或 **下界 → 主世界**（×8），1 下界格 = 8 主世界格；
+   在下界地图上打开时会自动选好「下界 → 主世界」（预填的是下界坐标，不会按反方向算）；
 3. 结果可「复制」，或点「定位」直接跳转过去（切维度后坐标照常换算，不用管地图）；
-4. 负数按 Minecraft（Java）的取整规则：`-12.5 → -12`（向零取整），和游戏内实际传送一致。
+4. 负数按 Minecraft（Java）的取整规则：`-12.5 → -12`（向零取整），和游戏内实际传送一致；
+5. 定位目标超出当前地图画幅时（比如 ×8 后落在主世界地图之外），会提示「不在当前地图画幅内」而不是跳到空白区域。
 
 URL 深链格式（可以手动拼，也可以从「分享」按钮拿）：
 

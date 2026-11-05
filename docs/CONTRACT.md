@@ -396,6 +396,8 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 ## 10. 瓦片底图（`assets/js/tiles.js`，2026-11-06）
 
 与「单张 PNG + calibration」并列的第二种底图。维度里写了 `tiles` 就走瓦片，没写就**一行不变**地走原来的单张图片逻辑。
+当前三个维度（主世界 / 下界 / 末地）都配了 `tiles`，单张 PNG 仅作兜底；下界 / 末地由配置仓库的
+`tools/png-to-tiles.mjs` 从整图直切生成（主世界仍走 Xaero 导出图管线）。
 
 ### 10.1 配置与 manifest
 
@@ -488,7 +490,7 @@ export function overworldToNether(x, z) // -> { x: Math.round(x/8), z: Math.roun
 export function netherToOverworld(x, z) // -> { x: x*8, z: z*8 } | null
 export class ConverterPanel {           // 面板：方向切换 / 复制 / 定位 / Esc 关闭，坐标输入接受数字字符串
   constructor(rootEl, { getCenter, onLocate, onCopy })
-  setOpen(open, { prefill })            // prefill = 视野中心世界坐标 {x,z}
+  setOpen(open, { prefill, direction }) // prefill = 视野中心世界坐标 {x,z}；预填成功时方向跟随 direction
   isOpen() / convert() / destroy()
 }
 ```
@@ -497,5 +499,11 @@ export class ConverterPanel {           // 面板：方向切换 / 复制 / 定�
   `-0` 保留符号（`-0.5 → -0`），显示层按 `0` 处理即可。
 - **接线**：`app.js` 的 `initConverter()` 挂到 `#btn-convert`；打开时用 `worldAtViewCenter()` 预填
   （投影 → `imageToWorld` → 取整），「定位」走 `gotoWorld`。换维度不影响换算本身（只换坐标空间）。
+- **方向自适应（2026-11-06 补）**：预填值取自当前维度的视野中心，方向必须与之一致——
+  下界维度打开时自动切到 `n2ow`（×8），主世界维度为 `ow2n`（÷8）；
+  其他维度（如末地）不预填。方向只在「预填实际生效」时切换，用户已输入的值不被重新解释。
+- **画幅守卫（2026-11-06 补）**：「定位」前检查目标是否在当前地图画幅（`projection.xMin..xMax / zMin..zMax`）内；
+  画幅外（如 ×8 结果超出主世界地图）不再静默跳到空白区，改为 toast「目标坐标 … 不在当前地图画幅内，未定位」。
 - 面板在 `#viewport` 内右下角（与测距读数面板同款样式，窄屏 `≤860px` 改铺底）。
-- 回归：`tests/converter.test.mjs`（÷8/×8/往返/字符串输入/非法输入 6 例）。
+- 回归：`tests/converter.test.mjs`（÷8/×8/往返/字符串输入/非法输入 6 例）；
+  `tests/smoke.mjs` §6e 三项（双向换算 + 画幅内定位、下界预填自动 ×8、画幅外定位提示且视野不动）。

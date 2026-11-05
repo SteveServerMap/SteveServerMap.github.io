@@ -2667,6 +2667,125 @@ async function main() {
     }
   });
 
+  /* ---------------- 6e. 坐标换算 ---------------- */
+  await checkIfReady('convert.directions', '换算：双向换算正确，定位到画幅内坐标有效', async () => {
+    await page.evalFn(() => window.__mapApp.applyDimension('overworld'));
+    await page.settle(320);
+    const opened = await page.evalFn(() => {
+      const btn = document.getElementById('btn-convert');
+      if (!btn) throw new Error('缺少 #btn-convert');
+      btn.click();
+      const x = document.getElementById('convert-x');
+      const z = document.getElementById('convert-z');
+      x.value = '80';
+      z.value = '80';
+      x.dispatchEvent(new Event('input', { bubbles: true }));
+      z.dispatchEvent(new Event('input', { bubbles: true }));
+      const res = () => document.getElementById('convert-result').textContent;
+      const ow = res();
+      document.getElementById('convert-dir-n').click();
+      const n2ow = res();
+      const nActive = document.getElementById('convert-dir-n').classList.contains('is-active');
+      document.getElementById('convert-dir-ow').click();
+      const back = res();
+      document.getElementById('convert-dir-n').click();
+      document.getElementById('convert-locate').click();
+      return { ow, n2ow, back, nActive };
+    });
+    if (opened.ow !== 'X 10   Z 10') {
+      throw new Error(`主世界→下界 80,80 应为「X 10 Z 10」，实际「${opened.ow}」`);
+    }
+    if (opened.n2ow !== 'X 640   Z 640') {
+      throw new Error(`下界→主世界 80,80 应为「X 640 Z 640」，实际「${opened.n2ow}」`);
+    }
+    if (opened.back !== 'X 10   Z 10') {
+      throw new Error(`切回 ÷8 后应为「X 10 Z 10」，实际「${opened.back}」`);
+    }
+    if (!opened.nActive) throw new Error('点「下界 → 主世界」后按钮未高亮');
+    await page.settle(1400);
+    const center = await page.evalFn(() => window.__mapApp.worldAtViewCenter());
+    if (!center || Math.abs(center.x - 640) > 4 || Math.abs(center.z - 640) > 4) {
+      throw new Error(`定位到 640,640 失败，视野中心 ${JSON.stringify(center)}`);
+    }
+    return '÷8 → 10/10 · ×8 → 640/640 · 定位到 640,640';
+  });
+
+  await checkIfReady('convert.prefill', '换算：下界维度打开面板自动切 ×8 并预填下界坐标', async () => {
+    await page.evalFn(() => window.__mapApp.applyDimension('nether'));
+    await page.settle(320);
+    const state = await page.evalFn(() => {
+      document.getElementById('convert-close').click();
+      const x = document.getElementById('convert-x');
+      const z = document.getElementById('convert-z');
+      x.value = '';
+      z.value = '';
+      x.dispatchEvent(new Event('input', { bubbles: true }));
+      z.dispatchEvent(new Event('input', { bubbles: true }));
+      document.getElementById('btn-convert').click();
+      const nActive = document.getElementById('convert-dir-n').classList.contains('is-active');
+      const prefX = x.value;
+      const prefZ = z.value;
+      const preResult = document.getElementById('convert-result').textContent;
+      x.value = '100';
+      z.value = '100';
+      x.dispatchEvent(new Event('input', { bubbles: true }));
+      z.dispatchEvent(new Event('input', { bubbles: true }));
+      return {
+        nActive,
+        prefX,
+        prefZ,
+        preResult,
+        result: document.getElementById('convert-result').textContent,
+      };
+    });
+    if (!state.nActive) throw new Error('在下界维度打开面板，「下界 → 主世界」方向应自动选中');
+    if (!(state.prefX !== '' && state.prefZ !== '')) {
+      throw new Error(`打开时应预填当前视野中心，实际 X="${state.prefX}" Z="${state.prefZ}"`);
+    }
+    if (state.preResult === '—') throw new Error('预填后应有换算结果');
+    if (state.result !== 'X 800   Z 800') {
+      throw new Error(`下界 100,100 按 ×8 应为「X 800 Z 800」，实际「${state.result}」`);
+    }
+    return `预填 (${state.prefX}, ${state.prefZ}) · 方向自动 ×8 · 100 → 800`;
+  });
+
+  await checkIfReady('convert.oob', '换算：定位到画幅外时提示且不移动视野', async () => {
+    const setup = await page.evalFn(() => {
+      const x = document.getElementById('convert-x');
+      const z = document.getElementById('convert-z');
+      x.value = '500';
+      z.value = '500';
+      x.dispatchEvent(new Event('input', { bubbles: true }));
+      z.dispatchEvent(new Event('input', { bubbles: true }));
+      const before = window.__mapApp.worldAtViewCenter();
+      document.getElementById('convert-locate').click();
+      const toast = document.getElementById('toast');
+      return {
+        before,
+        result: document.getElementById('convert-result').textContent,
+        toastShown: toast ? toast.classList.contains('is-show') : false,
+        toastText: toast ? toast.textContent : '',
+      };
+    });
+    if (setup.result !== 'X 4000   Z 4000') {
+      throw new Error(`下界 500,500 按 ×8 应为「X 4000 Z 4000」，实际「${setup.result}」`);
+    }
+    if (!setup.toastShown || !/画幅/.test(setup.toastText)) {
+      throw new Error(`定位到画幅外应有提示，实际 toastShown=${setup.toastShown} text="${setup.toastText}"`);
+    }
+    await page.settle(600);
+    const after = await page.evalFn(() => window.__mapApp.worldAtViewCenter());
+    if (after.x !== setup.before.x || after.z !== setup.before.z) {
+      throw new Error(`画幅外定位不应移动视野：${JSON.stringify(setup.before)} → ${JSON.stringify(after)}`);
+    }
+    await page.evalFn(() => {
+      document.getElementById('convert-close').click();
+      window.__mapApp.applyDimension('overworld');
+    });
+    await page.settle(320);
+    return `toast「${setup.toastText}」· 视野保持 ${JSON.stringify(setup.before)}`;
+  });
+
   /* ---------------- 7. 窄屏 ---------------- */
   await checkIfReady(
     'narrow.layout',
