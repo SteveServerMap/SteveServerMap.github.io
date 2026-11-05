@@ -14,7 +14,6 @@ assets/js/coords.js        viewer-dev 拥有（纯函数，无 DOM）
 assets/js/viewer.js        viewer-dev 拥有（平移缩放引擎）
 assets/js/markers.js       ui-dev 拥有（标记图层）
 assets/js/sidebar.js       ui-dev 拥有（左侧路径点菜单）
-assets/js/calibrate.js     style-dev 拥有（校准向导）
 assets/js/app.js           Lead 拥有（装配所有模块）
 tests/                     qa-dev 拥有
 ```
@@ -168,7 +167,7 @@ DOM：每个路径点生成
 ```
 定位用 `style.transform = translate3d(x px, y px, 0)`（外层 `.marker` 有 `position:absolute; left:0; top:0`，
 通过 `translate(-50%,-100%)` 让针尖对准坐标点）。视口外的标记加 `.is-offscreen`（`visibility:hidden`）。
-图标解析 `ICONS` 表（见 §7）。详情卡片由 markers.js 生成到 `#overlay` 内的 `.marker-popup`。
+图标解析 `ICONS` 表（见 §6）。详情卡片由 markers.js 生成到 `#overlay` 内的 `.marker-popup`。
 
 ---
 
@@ -230,28 +229,17 @@ sidebar.js 负责绑定它们。
   **鼠标停在路径点标记（`.marker` / `.marker-pin` / `.marker-label`）上时滚轮仍然缩放地图**（锚点为光标位置）。
 - **指针**：`.marker` 仍然忽略拖拽/点击（点标记 = 选中并打开弹窗，不拖动地图）。
 
-## 6. `assets/js/calibrate.js`（style-dev）—— 校准向导
+### 5.w 站内校准向导已移除（2026-11-05）
 
-```js
-export function openCalibrator({
-  dimension,            // 当前维度对象（含 calibration）
-  view,                 // MapView 实例（用于取像素、切换拾取模式）
-  projection,           // 当前投影
-  imageSize,            // {width, height}
-  onPreview(calibration),   // 实时预览（临时应用，不落盘）
-  onApply(calibration),     // 用户点「应用」：写入运行时并刷新
-  onClose(),                // 关闭（若未应用则回滚预览）
-})
-```
-流程：① 点「开始拾取」→ 在地图上点已知地标 A → 弹出输入 X/Z（或 Y 可选）→ 确定；
-② 再点地标 B → 输入 X/Z；③ 实时显示解出的 `xMin/xMax/zMin/zMax`、每方块像素数与校验提示；
-④ 提供「复制配置片段」（JSON，可直接粘进 `config.json` 的 `calibration`）、「应用」、「取消」。
-另外提供「直接输入画幅」页签（手填 xMin/xMax/zMin/zMax），以及「恢复默认」。取消要回滚 `onPreview`。
-窗口尺寸取 `#calibrator` 内的既有节点（见 index.html）。
+- 顶栏 `#btn-calibrate`、提示条里的 `#notice-calibrate`、`#calibrator` 弹窗、`assets/js/calibrate.js` 全部删除；
+  校准统一在 **SteveServerMapConfig** 配置工具里做，写完 `config.json` 发布即可。
+- 同时移除「本地校准覆盖」（`localStorage['steveservermap.calibration.v1']`）：画幅现在**只**来自 `config.json`，
+  不会再出现"某台电脑上位置和别人的不一样"。旧的存储键不再读取（保留也不会生效）。
+- 保留的 API：`window.__mapApp.applyCalibration(calibration)`（供自动化测试模拟画幅变化）、`resolveCalibration()`。
+- `#calibration-notice` 仍在（画幅未校准时提示），只是不再带按钮。
+- `assets/css/style.css` 的 07 段（校准向导样式）已删除。
 
----
-
-## 7. 配置格式（`config.json`）
+## 6. 配置格式（`config.json`）
 
 ```jsonc
 {
@@ -293,7 +281,7 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 
 ---
 
-## 8. CSS 约定（style-dev 定，其他人只加类名不改 style.css）
+## 7. CSS 约定（style-dev 定，其他人只加类名不改 style.css）
 
 - 全局变量：`--bg --panel --panel-2 --border --text --muted --accent --accent-2 --danger --radius --shadow`
 - 侧栏展开宽度 `--sidebar-w: 320px`；`body[data-sidebar="collapsed"]` 时侧栏移出（移动端为覆盖抽屉）。
@@ -304,11 +292,10 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 
 ---
 
-## 9. 验收标准（qa-dev 会跑）
+## 8. 验收标准（qa-dev 会跑）
 
 1. `python -m http.server` 起静态服务后，页面无 console error，`#map-image` 有 `naturalWidth > 0`。
 2. 三个维度都能切换；缺图维度显示 `#map-state` 提示而不是崩溃。
 3. 路径点数量 = config 中该维度数量，且位置随缩放/平移正确跟随（误差 < 1px）。
 4. 侧栏点击路径点 → 视图居中该点；分组开关生效。
-5. 校准向导能由两点反解画幅，并给出可粘贴的 JSON。
 6. 窄屏（390×844）下侧栏可开合，地图可用。

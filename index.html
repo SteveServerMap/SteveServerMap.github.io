@@ -34,9 +34,6 @@
     <div class="topbar-right">
       <div id="dimension-switch" class="dimension-switch" role="tablist" aria-label="维度切换"></div>
       <div class="topbar-sep" aria-hidden="true"></div>
-      <button id="btn-calibrate" class="btn ghost" type="button" title="校准地图画幅（画幅变化后重新校准，路径点即可对回）">
-        <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg><span>校准</span>
-      </button>
       <button id="btn-copy-link" class="btn ghost" type="button" title="复制当前视角链接">
         <svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>分享</span>
       </button>
@@ -71,8 +68,7 @@
 
       <div id="calibration-notice" class="notice" hidden>
         <svg class="icon" aria-hidden="true"><use href="#i-warning"></use></svg>
-        <span class="notice-text">当前维度画幅尚未校准，路径点位置可能不准。</span>
-        <button id="notice-calibrate" class="link-btn" type="button">去校准</button>
+        <span class="notice-text">当前维度画幅尚未校准，路径点位置可能不准（请用 SteveServerMapConfig 配置工具校准后重新发布）。</span>
       </div>
 
       <div id="sidebar-scroll" class="sidebar-scroll">
@@ -157,88 +153,6 @@
   </footer>
 </div>
 
-<!-- ============================== 校准向导 ============================== -->
-<div id="calibrator" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="cal-title">
-  <div class="modal-panel">
-    <header class="modal-head">
-      <h2 id="cal-title" class="modal-title">
-        <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg>
-        校准地图画幅
-      </h2>
-      <button id="cal-close" class="icon-btn" type="button" aria-label="关闭">
-        <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
-      </button>
-    </header>
-
-    <div class="modal-body">
-      <p class="modal-help">
-        地图画幅变化（重新导出、裁剪、分辨率改变）后，用<b>两个已知地标</b>重新校准即可，
-        路径点存的是世界坐标，不会因此丢失。点击「开始拾取」，在地图上依次点 A、B 两点并填入它们的方块坐标。
-      </p>
-
-      <div class="cal-tabs" role="tablist">
-        <button class="cal-tab is-active" data-cal-tab="pick" type="button" role="tab">两点校准</button>
-        <button class="cal-tab" data-cal-tab="manual" type="button" role="tab">直接输入画幅</button>
-      </div>
-
-      <div class="cal-pane" data-cal-pane="pick">
-        <div class="cal-points">
-          <fieldset class="cal-point" data-point="a">
-            <legend>地标 A</legend>
-            <div class="cal-point-px" id="cal-a-px">尚未拾取</div>
-            <div class="cal-fields">
-              <label>X <input id="cal-a-x" type="number" step="any" inputmode="decimal"></label>
-              <label>Z <input id="cal-a-z" type="number" step="any" inputmode="decimal"></label>
-            </div>
-          </fieldset>
-          <fieldset class="cal-point" data-point="b">
-            <legend>地标 B</legend>
-            <div class="cal-point-px" id="cal-b-px">尚未拾取</div>
-            <div class="cal-fields">
-              <label>X <input id="cal-b-x" type="number" step="any" inputmode="decimal"></label>
-              <label>Z <input id="cal-b-z" type="number" step="any" inputmode="decimal"></label>
-            </div>
-          </fieldset>
-        </div>
-        <div class="cal-actions">
-          <button id="cal-pick-a" class="btn" type="button">拾取 A</button>
-          <button id="cal-pick-b" class="btn" type="button">拾取 B</button>
-          <button id="cal-pick-clear" class="btn ghost" type="button">清除</button>
-        </div>
-      </div>
-
-      <div class="cal-pane" data-cal-pane="manual" hidden>
-        <div class="cal-manual">
-          <label>左边缘世界 X <input id="cal-x-min" type="number" step="any" inputmode="decimal"></label>
-          <label>右边缘世界 X <input id="cal-x-max" type="number" step="any" inputmode="decimal"></label>
-          <label>上边缘世界 Z <input id="cal-z-min" type="number" step="any" inputmode="decimal"></label>
-          <label>下边缘世界 Z <input id="cal-z-max" type="number" step="any" inputmode="decimal"></label>
-        </div>
-        <label class="cal-check">
-          <input id="cal-flip-z" type="checkbox"> 南北翻转（图片上方是 +Z）
-        </label>
-      </div>
-
-      <div id="cal-status" class="cal-status"></div>
-
-      <div class="cal-result">
-        <div class="cal-result-head">
-          <span>解出的画幅</span>
-          <button id="cal-copy" class="link-btn" type="button">复制 JSON 片段</button>
-        </div>
-        <pre id="cal-json" class="cal-json">—</pre>
-      </div>
-    </div>
-
-    <footer class="modal-foot">
-      <button id="cal-reset" class="btn ghost" type="button">恢复默认</button>
-      <div class="modal-foot-right">
-        <button id="cal-cancel" class="btn ghost" type="button">取消</button>
-        <button id="cal-apply" class="btn primary" type="button" disabled>应用并刷新</button>
-      </div>
-    </footer>
-  </div>
-</div>
 
 <!-- 提示条 -->
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

@@ -14,7 +14,6 @@ import { createProjection } from './coords.js';
 import { MapView } from './viewer.js';
 import { MarkerLayer } from './markers.js';
 import { Sidebar } from './sidebar.js';
-import { openCalibrator } from './calibrate.js';
 
 /* ============================== 小工具 ============================== */
 
@@ -46,8 +45,6 @@ const state = {
   imageSize: null,
   projection: null,
   calibration: null,
-  /** 本地校准覆盖：{ [dimensionId]: calibration }（仅当前浏览器，写不进 config.json） */
-  localCalibration: {},
   labelMode: 'hover',
   grid: false,
   query: '',
@@ -65,7 +62,6 @@ let gridCtx = null;
 let toastTimer = null;
 let hashTimer = null;
 
-const LS_KEY = 'steveservermap.calibration.v1';
 
 /* ============================== 启动 ============================== */
 
@@ -84,8 +80,7 @@ async function bootstrap() {
       state.configWarnings = warnings;
     }
 
-    state.localCalibration = readLocalCalibration();
-    state.labelMode = config.ui.labelMode || 'hover';
+      state.labelMode = config.ui.labelMode || 'hover';
     state.grid = config.ui.grid === true;
     document.body.dataset.labels = state.labelMode;
 
@@ -293,9 +288,6 @@ function handleAction(name) {
       break;
     case 'copy-link':
       copyShareLink();
-      break;
-    case 'calibrate':
-      openCalibration();
       break;
     case 'zoom-in':
       tryCall(view, 'zoomBy', 1.35);
@@ -627,8 +619,7 @@ function buildProjection(calibration, imageSize) {
 
 /** 合并 config.json 与浏览器本地校准覆盖，解析出最终画幅 */
 function resolveCalibration(dim, imageSize) {
-  const local = state.localCalibration[dim.id];
-  const base = local || dim.calibration || {};
+  const base = dim.calibration || {};
   let xMin = Number(base.xMin);
   let xMax = Number(base.xMax);
   let zMin = Number(base.zMin);
@@ -655,12 +646,11 @@ function resolveCalibration(dim, imageSize) {
     zMax: Math.max(zMin, zMax),
     flipZ: base.flipZ === true,
     calibrated: base.calibrated === true,
-    local: !!local,
     note: base.note || '',
   };
 }
 
-function applyCalibration(calibration, { persistLocal = false } = {}) {
+function applyCalibration(calibration) {
   const size = state.imageSize;
   if (!size || !calibration) return;
   const proj = buildProjection(calibration, size);
@@ -671,10 +661,6 @@ function applyCalibration(calibration, { persistLocal = false } = {}) {
   state.calibration = { ...calibration, calibrated: true };
   state.projection = proj;
   tryCall(view, 'setProjection', proj);
-  if (persistLocal) {
-    state.localCalibration[state.dimension.id] = { ...calibration, calibrated: true };
-    writeLocalCalibration();
-  }
   refreshMarkers();
   updateCalibrationNotice();
   updateFooterStatus();
@@ -685,65 +671,6 @@ function updateCalibrationNotice() {
   const show = !state.calibration || state.calibration.calibrated !== true;
   tryCall(sidebar, 'setCalibrationNotice', show);
   document.body.dataset.calibrated = show ? '0' : '1';
-}
-
-function openCalibration() {
-  if (!state.imageSize) {
-    toast('地图还没载入，无法校准');
-    return;
-  }
-  const original = state.calibration ? { ...state.calibration } : null;
-  const api = {
-    dimension: state.dimension,
-    view,
-    projection: state.projection,
-    imageSize: state.imageSize,
-    onPreview: (cal) => applyCalibration(cal),
-    onApply: (cal) => {
-      applyCalibration(cal, { persistLocal: true });
-      toast('已应用校准（已存到本浏览器）；把 JSON 片段写进 config.json 才能对所有人生效');
-    },
-    onClose: () => {
-      if (original) applyCalibration(original);
-    },
-  };
-  try {
-    const maybe = openCalibrator(api);
-    if (maybe && typeof maybe.catch === 'function') maybe.catch((e) => console.error(e));
-  } catch (err) {
-    console.error('[app] 打开校准向导失败', err);
-    toast('校准向导加载失败');
-  }
-}
-
-function readLocalCalibration() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeLocalCalibration() {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(state.localCalibration));
-  } catch (err) {
-    console.warn('[app] 无法写入 localStorage', err);
-  }
-}
-
-function clearLocalCalibration() {
-  state.localCalibration = {};
-  try {
-    localStorage.removeItem(LS_KEY);
-  } catch {
-    /* ignore */
-  }
-  toast('已清除本浏览器的校准覆盖');
-  if (state.dimension) applyDimension(state.dimension.id);
 }
 
 /* ============================== 标签 / 网格 / 分享 ============================== */
@@ -1029,17 +956,9 @@ function showFatalConfigError(error) {
 function updateFooterStatus() {
   const el = $('footer-status');
   if (!el) return;
-  const local = state.dimension ? state.localCalibration[state.dimension.id] : null;
-  if (local) {
-    el.hidden = false;
-    el.textContent = '本地校准生效（仅本浏览器）· 点击清除';
-    el.classList.add('is-clickable');
-    el.onclick = () => clearLocalCalibration();
-  } else {
-    el.hidden = true;
-    el.textContent = '';
-    el.onclick = null;
-  }
+  el.hidden = true;
+  el.textContent = '';
+  el.onclick = null;
 }
 
 function toast(message) {
@@ -1127,6 +1046,5 @@ window.__mapApp = {
   toggleGrid,
   cycleLabelMode,
   fitToContent,
-  openCalibration,
   toast,
 };

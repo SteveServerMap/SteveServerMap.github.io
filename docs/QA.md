@@ -2,6 +2,17 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 站内校准向导移除（2026-11-05）
+
+- 移除：顶栏「校准」按钮、提示条「去校准」链接、`#calibrator` 弹窗、`assets/js/calibrate.js`（41KB）、
+  CSS 07 段（约 11.7KB），以及 `localStorage` 本地校准覆盖。
+- smoke 同步删除：`cal.open` / `cal.manual` / `cal.close` / `cal.persist` / `cal.pick` 五项及其辅助函数
+  （`openCalibratorPanel`、`CAL_JSON`、选择器映射里的 calibrator/calJson）。
+  保留 `cal.crop-change`（走 `__mapApp.applyCalibration` API，模拟画幅变化后标记对回）。
+- 验证（本地无头 Edge）：`#btn-calibrate` / `#calibrator` / `#notice-calibrate` 均不存在、`__mapApp.openCalibration` 已消失、
+  `applyCalibration` 仍可用、15 个标记正常渲染、无 console error、无 404（不再请求 calibrate.js）。
+- ⚠️ 现存失败仍是那 5 项数据耦合项（`pos.zoom` / `pos.drag` / `cal.crop-change` / `sidebar.search` / `deep-link`），与本次无关。
+
 ## 「分组」面板移除（2026-11-05）
 
 - 侧栏新增可折叠分组头之后，原「分组」面板（`#panel-groups` / `#group-list`）变成纯重复：颜色、名称、数量、眼睛开关在分组头上都有。
@@ -33,7 +44,7 @@
 ```
 tests/
   headless.mjs        可复用的无头浏览器 / CDP 驱动库（静态服务器、浏览器生命周期、Page 封装、诊断收集、报告器）
-  smoke.mjs           端到端验收：逐条覆盖 docs/CONTRACT.md §9，并补充配置驱动 / 重新校准 / 本地覆盖 / 窄屏回归
+  smoke.mjs           端到端验收：逐条覆盖 docs/CONTRACT.md §8，并补充配置驱动 / 重新校准 / 本地覆盖 / 窄屏回归
   static-checks.mjs   无需浏览器的静态检查：文件、引用、config、import 解析、CSS 契约
   coords.test.mjs     （viewer-dev 维护）coords.js 纯函数单测，node --test 运行
   artifacts/          运行产物：成功截图、失败截图 + DOM dump、report.json（默认不入库）
@@ -118,10 +129,10 @@ node --test tests/coords.test.mjs
 | 基底图 | 三个维度的 PNG 存在、PNG 头合法、尺寸可解析（overworld 3584×5120、nether 2048×2048、the_end 2048×2048） |
 | index.html | 本地 `src`/`href` 全部可解析；无 CDN/远程资源；`<script type="module" src="assets/js/app.js">`；契约要求的 29 个 DOM id 齐全 |
 | config.json | 合法 JSON；`version/site/defaultDimension/ui`；3 个维度 id；路径点 id/坐标/分组引用合法；calibration 四边界与布尔标志；每方块像素数比例合理；`config.schema.json` 可解析且描述 dimensions |
-| ES Module | 所有相对 `import/export ... from` 与动态 `import()` 都能解析；无裸模块名；无 `node:` 内置模块；契约 §2~§6 要求的导出名齐全（`createProjection`… / `MapView` / `MarkerLayer`+`ICONS` / `Sidebar` / `openCalibrator`）；`app.js` 不是空壳 |
+| ES Module | 所有相对 `import/export ... from` 与动态 `import()` 都能解析；无裸模块名；无 `node:` 内置模块；契约 §2~§6 要求的导出名齐全（`createProjection`… / `MapView` / `MarkerLayer`+`ICONS` / `Sidebar`）；`app.js` 不是空壳 |
 | CSS 契约 §8 | 12 个 CSS 变量 + `--sidebar-w: 320px`；`[hidden]{display:none!important}`；`body[data-sidebar="collapsed"]`；`.app` 的 `grid-template-rows: auto 1fr auto`；`max-width: 860px` 断点；`.map-viewport/.map-stage/.map-overlay`；标记层类名；无 `@import` 远程样式 |
 
-### smoke.mjs（28 项，对应 CONTRACT §9 + 交付核心卖点）
+### smoke.mjs（对应 CONTRACT §8 + 交付核心卖点）
 
 | id | 断言 |
 | --- | --- |

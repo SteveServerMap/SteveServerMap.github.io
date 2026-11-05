@@ -3,10 +3,10 @@
  *
  * 只操作 index.html 里既有的节点：
  *   #sidebar #dimension-switch #waypoint-count #waypoint-search #search-clear
- *   #calibration-notice #notice-calibrate #group-list #waypoint-list #waypoint-empty
+ *   #calibration-notice #waypoint-list #waypoint-empty
  *   #sidebar-error #dimension-meta #site-title #site-subtitle #site-footer #footer-dim
  *   #sidebar-backdrop #btn-collapse #sidebar-toggle #btn-all-visible #btn-all-hidden
- *   #btn-sort #btn-toggle-labels #btn-fit #btn-grid #btn-reset #btn-copy-link #btn-calibrate
+ *   #btn-sort #btn-toggle-labels #btn-fit #btn-grid #btn-reset #btn-copy-link
  *   #zoom-in #zoom-out #zoom-fit
  * 节点缺失时只 console.warn，不抛错（便于分阶段集成）。
  *
@@ -31,7 +31,6 @@ const NODES = {
   waypointEmpty: 'waypoint-empty',
   sidebarError: 'sidebar-error',
   calibrationNotice: 'calibration-notice',
-  noticeCalibrate: 'notice-calibrate',
   dimensionMeta: 'dimension-meta',
   siteTitle: 'site-title',
   siteSubtitle: 'site-subtitle',
@@ -48,7 +47,6 @@ const NODES = {
   btnGrid: 'btn-grid',
   btnReset: 'btn-reset',
   btnCopyLink: 'btn-copy-link',
-  btnCalibrate: 'btn-calibrate',
   zoomIn: 'zoom-in',
   zoomOut: 'zoom-out',
   zoomFit: 'zoom-fit',
@@ -465,9 +463,7 @@ export class Sidebar {
       [this.el.btnGrid, 'grid'],
       [this.el.btnReset, 'reset'],
       [this.el.btnCopyLink, 'copy-link'],
-      [this.el.btnCalibrate, 'calibrate'],
-      [this.el.noticeCalibrate, 'calibrate'],
-      [this.el.zoomIn, 'zoom-in'],
+          [this.el.zoomIn, 'zoom-in'],
       [this.el.zoomOut, 'zoom-out'],
       [this.el.zoomFit, 'fit'],
     ];
