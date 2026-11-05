@@ -41,6 +41,7 @@ const NODES = {
   sidebarToggle: 'sidebar-toggle',
   btnAllVisible: 'btn-all-visible',
   btnAllHidden: 'btn-all-hidden',
+  btnExpandAll: 'btn-expand-all',
   btnSort: 'btn-sort',
   btnToggleLabels: 'btn-toggle-labels',
   btnFit: 'btn-fit',
@@ -333,6 +334,14 @@ export class Sidebar {
     return this._query;
   }
 
+  /** 清空搜索框并恢复完整列表（切维度时用） */
+  clearSearch() {
+    if (!this.el.search) return this._query;
+    this.el.search.value = '';
+    this._handleSearchInput();
+    return this._query;
+  }
+
   focusSearch() {
     if (this.el.search && typeof this.el.search.focus === 'function') this.el.search.focus();
   }
@@ -459,6 +468,7 @@ export class Sidebar {
     const actionButtons = [
       [this.el.btnAllVisible, 'all-visible'],
       [this.el.btnAllHidden, 'all-hidden'],
+      [this.el.btnExpandAll, 'expand-all'],
       [this.el.btnFit, 'fit'],
       [this.el.btnGrid, 'grid'],
       [this.el.btnReset, 'reset'],
@@ -711,6 +721,18 @@ export class Sidebar {
 
   _isGroupCollapsed(groupId) {
     return this._collapsedGroups.has(this._collapsedKey(groupId));
+  }
+
+  /** 展开全部分组（列表头「展开」按钮 / 用户折叠乱了时的逃生口） */
+  expandAllGroups() {
+    this._collapsedGroups.clear();
+    try {
+      localStorage.setItem(this._collapsedGroupsKey, JSON.stringify([]));
+    } catch {
+      /* 忽略 */
+    }
+    this._renderList();
+    return true;
   }
 
   _toggleGroupCollapse(groupId) {

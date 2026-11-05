@@ -349,3 +349,18 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 3. 路径点数量 = config 中该维度数量，且位置随缩放/平移正确跟随（误差 < 1px）。
 4. 侧栏点击路径点 → 视图居中该点；分组开关生效。
 6. 窄屏（390×844）下侧栏可开合，地图可用。
+
+## 9. 交互体检修正（2026-11-05）
+
+1. **切换维度**（`applyDimension`）：
+   - 切换前用 `rememberDimensionView(oldId)` 记住当前视角（`state.dimensionView`），切回来时 `restoreDimensionView()` 恢复
+     （画幅变了就放弃恢复，退回默认视野）；首次进入某维度仍用「聚焦世界原点 + 1024 方块」。
+   - 切维度会清空搜索框（`sidebar.clearSearch()`）与测量点，并 **toast 说明「已清空 N 个测量点」**。
+2. **Esc 优先级（最上层优先）**：路径点详情卡（按 `.marker-popup` 的 `hidden` 判断）> 测距模式 > 取消选中。
+3. **测距文案**：`Enter` 与 `Esc` 都是「结束/退出，测量点保留」，提示里写清楚。
+4. **深链 `#dim=…&wp=…`**：现在会 `markers.setSelected(wp)` + `sidebar.setActiveWaypoint(wp)`，别人点链接能直接看到卡片。
+5. **地址栏 hash 只在用户操作后写**：`state.hashArmed` 由滚轮/拖拽/缩放按钮/「整图」「原点」/列表点击定位 武装；
+   初始载入不写（避免复制地址栏误分享视角）。「分享」按钮仍会强制同步一次。
+6. **快捷键首次提示**：第一次按 `G` / `L` 时 toast 说明（`localStorage['ssm.hints.v1']` 只提示一次）。
+7. **「展开」按钮**：列表头新增 `#btn-expand-all` → `sidebar.expandAllGroups()`（折叠乱了时的逃生口）。
+

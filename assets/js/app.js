@@ -48,6 +48,10 @@ const state = {
   calibration: null,
   /** 测距模式开关 */
   measureActive: false,
+  /** 用户是否已经手动操作过视角（没操作前不往地址栏写 hash，避免"复制地址栏"误分享视角） */
+  hashArmed: false,
+  /** 每个维度最近一次的视角（切回来时恢复，而不是每次重新回原点） */
+  dimensionView: new Map(),
   labelMode: 'hover',
   grid: false,
   query: '',
@@ -180,8 +184,14 @@ function initViewer() {
   });
 
   // 缩放按钮（index.html 里的常驻控件）
-  bindClick('zoom-in', () => tryCall(view, 'zoomBy', 1.35));
-  bindClick('zoom-out', () => tryCall(view, 'zoomBy', 1 / 1.35));
+  bindClick('zoom-in', () => {
+    armHashSync();
+    tryCall(view, 'zoomBy', 1.35);
+  });
+  bindClick('zoom-out', () => {
+    armHashSync();
+    tryCall(view, 'zoomBy', 1 / 1.35);
+  });
   bindClick('zoom-fit', () => fitToContent());
   bindClick('btn-fit', () => fitToContent());
   // 左下角「原点」：回到世界原点 + 恢复默认视野比例（与进入页面时一致）
@@ -203,6 +213,9 @@ function initViewer() {
   };
   viewport.addEventListener('pointerdown', dismissHint);
   viewport.addEventListener('wheel', dismissHint, { passive: true });
+  // 用户一操作视角就"武装" hash 同步（在此之前不动地址栏）
+  viewport.addEventListener('pointerdown', armHashSync, { passive: true });
+  viewport.addEventListener('wheel', armHashSync, { passive: true });
 }
 
 /** 每次视图变化：标记重排 + 缩放百分比 + 比例尺 + 网格 + hash */
@@ -298,6 +311,9 @@ function handleAction(name) {
     case 'fit':
       fitToContent();
       break;
+    case 'expand-all':
+      tryCall(sidebar, 'expandAllGroups', true);
+      break;
     case 'reset':
       // 左下角「原点」：回到世界原点，并恢复到默认视野比例（而不是保持当前缩放）
       if (!focusOrigin({ animate: true })) gotoWorld(0, 0, { animate: true });
@@ -309,9 +325,11 @@ function handleAction(name) {
       copyShareLink();
       break;
     case 'zoom-in':
+      armHashSync();
       tryCall(view, 'zoomBy', 1.35);
       break;
     case 'zoom-out':
+      armHashSync();
       tryCall(view, 'zoomBy', 1 / 1.35);
       break;
     case 'all-visible':
@@ -350,6 +368,9 @@ async function applyDimension(dimensionId, opts = {}) {
   const dim =
     state.config.dimensions.find((d) => d.id === dimensionId) || state.config.dimensions[0];
   if (!dim) return;
+
+  // 切走之前先记下当前维度的视角（切回来时恢复）
+  if (state.dimension && String(state.dimension.id) !== String(dim.id)) rememberDimensionView(state.dimension.id);
 
   const token = ++state.loadToken;
   state.dimension = dim;
@@ -401,16 +422,28 @@ async function applyDimension(dimensionId, opts = {}) {
   state.calibration = resolveCalibration(dim, state.imageSize);
   state.projection = buildProjection(state.calibration, state.imageSize);
   tryCall(view, 'setProjection', state.projection);
+  // 换维度时测量点不再有效：先记下数量再清空（提示要用）
+  const measurePointsBeforeSwitch = measure ? measure.points.length : 0;
   tryCall(measure, 'setProjection', state.projection);
   tryCall(measure, 'clear');
   updateMeasureReadout();
 
-  // 视角：优先用 URL 深链，否则整图适配
+  // 视角：优先 URL 深链 → 该维度上次的视角 → 默认聚焦世界原点
   const hash = opts.hash || readHash();
   const applied = hash && hash.dim === dim.id ? applyHashView(hash) : false;
-  if (!applied) {
-    // 默认聚焦世界原点（而不是整图适配 = 最小缩放）
-    if (!focusOrigin({ animate: false })) fitToContent({ animate: false });
+  if (!applied && !restoreDimensionView(dim.id, size)) {
+    if (!focusOrigin({ animate: false, arm: false })) fitToContent({ animate: false, arm: false });
+  }
+
+  // 换维度后旧的搜索词/测量结果都不适用了，清掉并说清楚（否则会以为"这个维度没有点"）
+  if (state.query) {
+    state.query = '';
+    const search = $('waypoint-search');
+    if (search) search.value = '';
+    tryCall(sidebar, 'clearSearch');
+  }
+  if (measurePointsBeforeSwitch > 0) {
+    toast(`切换维度已清空 ${measurePointsBeforeSwitch} 个测量点`, 'info', 2600);
   }
 
   pushDataToSidebar();
@@ -547,7 +580,7 @@ function setMeasureActive(active) {
   if (panel) panel.hidden = !state.measureActive && measure.points.length === 0;
   document.body.classList.toggle('is-measuring', state.measureActive);
   if (state.measureActive) {
-    toast('测距已开启：点地图加测量点（点路径点会吸附）· Backspace 撤销 · Esc 退出');
+    toast('测距已开启：点地图加测量点（点路径点会吸附）· Backspace 撤销 · Enter/Esc 结束（测量点会保留）', 'ok', 4200);
   }
   updateMeasureReadout();
 }
@@ -673,6 +706,7 @@ function focusWaypoint(id, { fromList = false } = {}) {
   const pt = state.projection.worldToImage(wp.x, wp.z);
   if (!pt) return;
   const targetScale = Math.max(currentScale(), 0.6);
+  if (fromList) armHashSync();
   tryCall(view, 'centerOnImagePoint', pt.px, pt.py, { scale: targetScale, animate: true });
   tryCall(markers, 'setSelected', id);
   if (fromList) tryCall(markers, 'update');
@@ -683,8 +717,55 @@ function currentScale() {
   return vs ? vs.scale || 0.1 : 0.1;
 }
 
+/** 记下某个维度当前的视角（来回切维度时恢复，而不是每次都回原点） */
+function rememberDimensionView(dimensionId) {
+  const vs = safeViewState();
+  const size = state.imageSize;
+  if (!dimensionId || !vs || !size) return;
+  state.dimensionView.set(String(dimensionId), {
+    scale: vs.scale,
+    tx: vs.tx,
+    ty: vs.ty,
+    imageWidth: size.width,
+    imageHeight: size.height,
+  });
+}
+
+/** 恢复某维度上次的视角；画幅变了（图片换了）就放弃，交给默认视野 */
+function restoreDimensionView(dimensionId, size) {
+  const saved = state.dimensionView.get(String(dimensionId));
+  if (!saved || !size) return false;
+  if (saved.imageWidth !== size.width || saved.imageHeight !== size.height) return false;
+  const viewState = safeViewState();
+  if (!viewState || !(viewState.viewWidth > 0)) return false;
+  tryCall(view, 'setViewState', { scale: saved.scale, tx: saved.tx, ty: saved.ty }, { animate: false });
+  drawGrid(safeViewState());
+  return true;
+}
+
+/** 用户第一次操作视角后，才允许把视角写进地址栏 */
+/** 键盘暗门首次使用时给一次提示（同一会话只提示一次） */
+function hintOnce(key, message) {
+  try {
+    const seen = JSON.parse(localStorage.getItem('ssm.hints.v1') || '{}');
+    if (seen[key]) return;
+    seen[key] = 1;
+    localStorage.setItem('ssm.hints.v1', JSON.stringify(seen));
+  } catch {
+    /* 隐私模式下不记忆，但照常提示 */
+  }
+  toast(message, 'info', 3000);
+}
+
+function armHashSync() {
+  if (state.hashArmed) return;
+  state.hashArmed = true;
+  scheduleHashSync();
+}
+
 function fitToContent(opts = {}) {
   if (!state.imageSize) return;
+  if (opts.arm !== false) armHashSync();
   tryCall(view, 'fitToContent', { padding: 24, animate: opts.animate !== false });
   drawGrid(safeViewState());
 }
@@ -711,6 +792,7 @@ function defaultSpanBlocks() {
 /** 把视野聚焦到世界原点（等价于「回到原点」，但会主动设置一个合适的缩放） */
 function focusOrigin(opts = {}) {
   if (!state.projection || !state.imageSize) return false;
+  if (opts.arm !== false) armHashSync();
   const pt = state.projection.worldToImage(0, 0);
   if (!pt || !Number.isFinite(pt.px)) return false;
 
@@ -735,6 +817,7 @@ function gotoWorld(x, z, opts = {}) {
   }
   const pt = state.projection.worldToImage(x, z);
   if (!pt) return;
+  armHashSync();
   tryCall(view, 'centerOnImagePoint', pt.px, pt.py, { animate: opts.animate !== false });
 }
 
@@ -983,6 +1066,8 @@ function applyHashView(hash) {
   });
   if (hash.wp) {
     state.activeWaypointId = hash.wp;
+    tryCall(markers, 'setSelected', hash.wp);
+    tryCall(sidebar, 'setActiveWaypoint', hash.wp);
     tryCall(sidebar, 'setActiveWaypoint', hash.wp);
   }
   return true;
@@ -998,6 +1083,7 @@ function scheduleHashSync() {
 
 function syncHash() {
   if (!state.dimension || !state.projection) return;
+  if (!state.hashArmed) return; // 用户还没动过视角，先不写 hash
   const vs = safeViewState();
   if (!vs) return;
   const centerPx = (vs.viewWidth / 2 - vs.tx) / (vs.scale || 1);
@@ -1141,6 +1227,16 @@ function bindClick(id, handler) {
 function bindGlobalKeys() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // 最上层优先：先关路径点详情卡，再退测距，最后才是取消选中
+      // 注意：详情卡元素是常驻 DOM 的，要按 hidden 判断是否真的开着，否则 Esc 永远被"关卡片"吃掉
+      const popupEl = document.querySelector('.marker-popup');
+      const popupOpen = !!popupEl && !popupEl.hidden;
+      if (popupOpen) {
+        tryCall(markers, 'setSelected', null);
+        tryCall(sidebar, 'setActiveWaypoint', null);
+        state.activeWaypointId = null;
+        return;
+      }
       if (isMeasureActive()) {
         setMeasureActive(false);
         return;
@@ -1159,8 +1255,14 @@ function bindGlobalKeys() {
       setMeasureActive(false);
       return;
     }
-    if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) toggleGrid();
-    if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) cycleLabelMode();
+    if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) {
+      toggleGrid();
+      hintOnce('grid', 'G：显示/隐藏坐标网格');
+    }
+    if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) {
+      cycleLabelMode();
+      hintOnce('labels', 'L：切换标签模式（悬停 / 常显 / 隐藏）');
+    }
   });
 
   window.addEventListener('resize', () => {

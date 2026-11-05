@@ -2061,16 +2061,25 @@ async function main() {
       throw new Error(`撤销/清空行为不对：${JSON.stringify(undo)}`);
     }
 
-    // Esc 退出测距
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    await page.settle(260);
-    const exited = await page.evalFn(() => ({
-      active: window.__mapApp.state.measureActive,
-      pressed: document.getElementById('btn-measure')?.getAttribute('aria-pressed'),
-    }));
-    if (exited.active !== false || exited.pressed !== 'false') {
-      throw new Error(`Esc 后仍未退出测距：${JSON.stringify(exited)}`);
+    // Esc 退出测距：Esc 是「最上层优先」——有路径点详情卡时先关卡片，再按一次才退测距
+    let exited = null;
+    for (let press = 1; press <= 2; press += 1) {
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await page.settle(280);
+      exited = await page.evalFn(() => ({
+        active: window.__mapApp.state.measureActive,
+        pressed: document.getElementById('btn-measure')?.getAttribute('aria-pressed'),
+        popup: (() => {
+          const el = document.querySelector('.marker-popup');
+          return el ? !el.hidden : false;
+        })(),
+      }));
+      if (!exited.active) break;
     }
+    if (exited.active !== false || exited.pressed !== 'false') {
+      throw new Error(`连按 Esc 后仍未退出测距：${JSON.stringify(exited)}`);
+    }
+    if (exited.popup) throw new Error(`退出测距后详情卡仍开着：${JSON.stringify(exited)}`);
     return `吸附到「${target.id}」· 撤销/清空正常 · Esc 退出`;
   });
 
