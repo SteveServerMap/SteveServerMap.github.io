@@ -358,9 +358,10 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
    - 切维度会清空搜索框（`sidebar.clearSearch()`）与测量点，并 **toast 说明「已清空 N 个测量点」**。
 2. **Esc 优先级（最上层优先）**：路径点详情卡（按 `.marker-popup` 的 `hidden` 判断）> 测距模式 > 取消选中。
 3. **测距文案**：`Enter` 与 `Esc` 都是「结束/退出，测量点保留」，提示里写清楚。
-4. **深链 `#dim=…&wp=…`**：现在会 `markers.setSelected(wp)` + `sidebar.setActiveWaypoint(wp)`，别人点链接能直接看到卡片。
-5. **地址栏 hash 只在用户操作后写**：`state.hashArmed` 由滚轮/拖拽/缩放按钮/「整图」「原点」/列表点击定位 武装；
+4. **测距中看详情**：`Shift + 点路径点` 打开该点详情卡（不新增测量点、不退出测距）；吸附半径按屏幕 24px 折算。
+5. **深链 `#dim=…&wp=…`**：现在会 `markers.setSelected(wp)` + `sidebar.setActiveWaypoint(wp)`，别人点链接能直接看到卡片。
+6. **地址栏 hash 只在用户操作后写**：`state.hashArmed` 由滚轮/拖拽/缩放按钮/「整图」「原点」/列表点击定位 武装；
    初始载入不写（避免复制地址栏误分享视角）。「分享」按钮仍会强制同步一次。
-6. **快捷键首次提示**：第一次按 `G` / `L` 时 toast 说明（`localStorage['ssm.hints.v1']` 只提示一次）。
-7. **「展开」按钮**：列表头新增 `#btn-expand-all` → `sidebar.expandAllGroups()`（折叠乱了时的逃生口）。
+7. **快捷键首次提示**：第一次按 `G` / `L` 时 toast 说明（`localStorage['ssm.hints.v1']` 只提示一次）。
+8. **「展开」按钮**：列表头新增 `#btn-expand-all` → `sidebar.expandAllGroups()`（折叠乱了时的逃生口）。
 

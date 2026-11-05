@@ -2083,6 +2083,42 @@ async function main() {
     return `吸附到「${target.id}」· 撤销/清空正常 · Esc 退出`;
   });
 
+  await checkIfReady('measure.shift-detail', '测距中 Shift+点路径点：打开详情卡且不新增测量点', async () => {
+    const target = await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      if (!window.__mapApp.state.measureActive) document.getElementById('btn-measure').click();
+      const waypoint = window.__mapApp.state.dimension.waypoints[0];
+      if (!waypoint) return null;
+      const client = window.__mapApp.view.worldToClient(waypoint.x, waypoint.z);
+      return { id: String(waypoint.id), x: Math.round(client.x), y: Math.round(client.y) };
+    });
+    if (!target) throw new Error('当前维度没有路径点，无法验证 Shift+详情');
+
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y, button: 'none', modifiers: 8 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1, modifiers: 8 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1, modifiers: 8 });
+    await page.settle(420);
+
+    const state = await page.evalFn(() => {
+      const popup = document.querySelector('.marker-popup');
+      return {
+        points: window.__mapApp.measureSummary().points.length,
+        popup: popup ? !popup.hidden : false,
+        measureActive: window.__mapApp.state.measureActive,
+        active: window.__mapApp.state.activeWaypointId ?? null,
+      };
+    });
+    if (state.points !== 0) throw new Error(`Shift+点路径点不应加测量点，实际 ${state.points} 个`);
+    if (!state.popup) throw new Error('Shift+点路径点应打开详情卡');
+    if (!state.measureActive) throw new Error('Shift+看详情不应退出测距模式');
+
+    await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.setMeasureActive(false);
+    });
+    return `Shift+点击打开「${target.id}」详情，未加点`;
+  });
+
   await checkIfReady('measure.panel', '测距读数面板上的点击/滚轮不会穿透到地图（撤销/清空不误加点）', async () => {
     await ensureSidebarOpen();
     const rectOf = (selector) =>

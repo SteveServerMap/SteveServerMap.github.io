@@ -215,6 +215,10 @@ function initViewer() {
   viewport.addEventListener('wheel', dismissHint, { passive: true });
   // 用户一操作视角就"武装" hash 同步（在此之前不动地址栏）
   viewport.addEventListener('pointerdown', armHashSync, { passive: true });
+  // 测距模式下按住 Shift 点路径点 = 看详情（不新增测量点）
+  viewport.addEventListener('pointerdown', (event) => {
+    state.pointerShift = event.shiftKey === true;
+  }, { capture: true, passive: true });
   viewport.addEventListener('wheel', armHashSync, { passive: true });
 }
 
@@ -580,7 +584,7 @@ function setMeasureActive(active) {
   if (panel) panel.hidden = !state.measureActive && measure.points.length === 0;
   document.body.classList.toggle('is-measuring', state.measureActive);
   if (state.measureActive) {
-    toast('测距已开启：点地图加测量点（点路径点会吸附）· Backspace 撤销 · Enter/Esc 结束（测量点会保留）', 'ok', 4200);
+    toast('测距已开启：点地图加测量点（点路径点会吸附）· Shift+点路径点看详情 · Backspace 撤销 · Enter/Esc 结束（点会保留）', 'ok', 4600);
   }
   updateMeasureReadout();
 }
@@ -612,7 +616,8 @@ function snapToWaypoint(imagePoint) {
   if (!proj || !imagePoint) return null;
   const vs = safeViewState();
   const scale = vs && vs.scale > 0 ? vs.scale : 1;
-  const tolPx = 14 / scale;
+  // 吸附半径按屏幕 24px 折算：标记圆点本身就有 30px 宽，14px 时点在图钉中心反而吸不上
+  const tolPx = 24 / scale;
   let best = null;
   let bestDist = tolPx;
   const waypoints = state.dimension && Array.isArray(state.dimension.waypoints) ? state.dimension.waypoints : [];
@@ -622,7 +627,7 @@ function snapToWaypoint(imagePoint) {
     const dist = Math.hypot(img.px - imagePoint.px, img.py - imagePoint.py);
     if (dist < bestDist) {
       bestDist = dist;
-      best = { x: Number(waypoint.x), z: Number(waypoint.z), snapped: waypoint.name || waypoint.id || null };
+      best = { x: Number(waypoint.x), z: Number(waypoint.z), snapped: waypoint.name || waypoint.id || null, id: String(waypoint.id) };
     }
   }
   if (best) return best;
@@ -633,6 +638,14 @@ function snapToWaypoint(imagePoint) {
 /** 地图点击：测量模式下加一个测量点（不触发路径点选中） */
 function handleMeasureClick(imagePoint) {
   if (!measure || !imagePoint) return false;
+  // Shift+点击：跳出测量语义，直接看这个路径点的详情卡
+  if (state.pointerShift) {
+    const snapped = snapToWaypoint(imagePoint);
+    if (snapped && snapped.id) {
+      focusWaypoint(snapped.id, { fromList: true });
+      return true;
+    }
+  }
   const point = snapToWaypoint(imagePoint);
   // 调试用：记录最近一次测量点击（自动化测试与排查吸附问题会用）
   window.__measureLastClick = { imagePoint: { px: imagePoint.px, py: imagePoint.py }, point, active: state.measureActive };
