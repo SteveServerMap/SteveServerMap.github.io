@@ -201,6 +201,10 @@ sidebar.js 负责绑定它们。
 
 ---
 
+> **2026-11-05 起「分组」面板已移除**：分组信息（颜色 / 名称 / 数量 / 眼睛开关）只保留在路径点列表的分组头上，
+> 「全显 / 全隐」按钮移到了「列表」面板的标题栏。`#group-list` 与 `#panel-groups` 不再存在于 `index.html`，
+> `sidebar.js` 里相关代码路径仍保留（`this.el.groupList` 为空时自动跳过），便于将来需要时恢复。
+
 ### 5.x 侧栏路径点列表的分组折叠
 
 - `#waypoint-list` 的内容按「分组」分区渲染：每个分组一个 `section.wp-group[data-group]`，

@@ -1431,25 +1431,37 @@ async function main() {
       }
     }
 
-    const groups = await page.evalFn(GROUP_STATS);
-    if (!groups) throw new Error('找不到 #group-list');
-    const expectedGroupIds = dimension.groups.map((group) => group.id);
-    if (groups.count !== expectedGroupIds.length) {
-      throw new Error(
-        `分组行 ${groups.count} 个，config 分组 ${expectedGroupIds.length} 个（实际：${groups.ids.join(', ') || '空'}）`,
-      );
-    }
-    const missingGroups = expectedGroupIds.filter((id) => !groups.ids.includes(id));
-    if (missingGroups.length) {
-      throw new Error(`分组列表缺少：${missingGroups.join(', ')}（实际：${groups.ids.join(', ')}）`);
-    }
+    // 「分组」面板已移除：分组信息现在只存在于路径点列表的分组头里（名称/数量/眼睛按钮）
+    const headers = await page.evalFn(() =>
+      [...document.querySelectorAll('#waypoint-list .wp-group')].map((section) => {
+        const head = section.querySelector('.wp-group-head');
+        return {
+          group: section.dataset.group,
+          collapsed: section.classList.contains('is-collapsed'),
+          name: (head?.querySelector('.wp-group-name')?.textContent || '').trim(),
+          count: Number(head?.querySelector('.wp-group-count')?.textContent || '0'),
+          items: section.querySelectorAll('[data-id]').length,
+          hasEye: !!head?.querySelector('.group-eye'),
+          ariaExpanded: head?.getAttribute('aria-expanded'),
+        };
+      }),
+    );
+    if (!headers.length) throw new Error('列表里没有分组头（.wp-group-head）');
     for (const group of dimension.groups) {
-      const index = groups.ids.indexOf(group.id);
-      if (index >= 0 && groups.names[index] && !groups.names[index].includes(group.name)) {
-        throw new Error(`分组 ${group.id} 名称「${groups.names[index]}」，config 里是「${group.name}」`);
+      const target = headers.find((entry) => String(entry.group) === String(group.id));
+      if (!target) throw new Error(`列表缺少分组「${group.name}」(${group.id}) 的分组头`);
+      if (!target.name.includes(group.name) && !group.name.includes(target.name)) {
+        throw new Error(`分组头名称「${target.name}」，config 里是「${group.name}」`);
+      }
+      if (target.count !== target.items) {
+        throw new Error(`分组「${group.name}」头上写 ${target.count} 个，实际 ${target.items} 项`);
+      }
+      if (!target.hasEye) throw new Error(`分组「${group.name}」的分组头缺少眼睛按钮`);
+      if (target.ariaExpanded !== 'true' && target.ariaExpanded !== 'false') {
+        throw new Error(`分组「${group.name}」的分组头缺少 aria-expanded`);
       }
     }
-    return `${items.length} 个路径点、${groups.count} 个分组与 config 一致`;
+    return `${items.length} 个路径点、${headers.length} 个分组头与 config 一致`;
   });
 
   await checkIfReady(
@@ -1662,26 +1674,15 @@ async function main() {
     const group = dimension.groups.find((item) => item.id === 'event') ?? dimension.groups[0];
     const groupSize = dimension.waypoints.filter((waypoint) => (waypoint.group ?? 'default') === group.id).length;
 
+    // 「分组」面板已移除：现在用路径点列表里分组头上的眼睛按钮
     const target = await page.evalFn((groupId) => {
-      const root = document.querySelector('#group-list');
-      if (!root) return { found: false, reason: '缺少 #group-list' };
-      const rows = [...root.querySelectorAll('[data-group-id], [data-group], [data-id]')];
-      const row = rows.find(
-        (el) => (el.dataset.groupId || el.dataset.group || el.dataset.id) === groupId,
-      );
-      const scope = row ?? root;
-      const buttons = [...scope.querySelectorAll('button')];
-      const toggle =
-        buttons.find((button) => /eye|toggle|visible|switch/i.test(`${button.className} ${button.getAttribute('aria-label') ?? ''} ${button.title ?? ''}`)) ??
-        buttons[0] ??
-        (scope.tagName === 'BUTTON' ? scope : null);
-      if (!toggle) {
-        return {
-          found: false,
-          reason: `分组行 ${groupId} 里找不到眼睛按钮`,
-          html: root.innerHTML.slice(0, 600),
-        };
-      }
+      const section = document.querySelector(`#waypoint-list .wp-group[data-group="${groupId}"]`);
+      if (!section) return { found: false, reason: `列表里找不到分组分区「${groupId}」` };
+      const toggle = section.querySelector('.wp-group-head .group-eye');
+      if (!toggle) return { found: false, reason: `分组「${groupId}」的头部没有眼睛按钮`, html: section.outerHTML.slice(0, 600) };
+      // 折叠状态下按钮不可见，先展开
+      const head = section.querySelector('.wp-group-head');
+      if (section.classList.contains('is-collapsed') && head) head.click();
       toggle.scrollIntoView({ block: 'center' });
       const rect = toggle.getBoundingClientRect();
       return {

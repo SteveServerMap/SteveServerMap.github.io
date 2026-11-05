@@ -2,6 +2,17 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 「分组」面板移除（2026-11-05）
+
+- 侧栏新增可折叠分组头之后，原「分组」面板（`#panel-groups` / `#group-list`）变成纯重复：颜色、名称、数量、眼睛开关在分组头上都有。
+- 处理：删除该面板；「全显 / 全隐」(`#btn-all-visible` / `#btn-all-hidden`) 移到「列表」面板标题栏；
+  `sidebar.js` 的 `_renderGroups()` 在 `#group-list` 不存在时直接返回，其它逻辑共用。
+- 测试同步：
+  - `data.config` 改为校验**分组头**（名称 / 数量 / 眼睛按钮 / aria-expanded），不再依赖 `#group-list`；
+  - `group.toggle` 改为点列表分组头上的眼睛按钮（折叠状态下会先展开）。
+- 验证：全隐/全显（4 个分组头全部 `is-off`、眼睛 `aria-pressed=false`、标记隐藏）✓、折叠仍工作 ✓、`data.config` ✓、`group.toggle` ✓，
+  无 console error。剩余 5 项 `pos.zoom`/`pos.drag`/`cal.crop-change`/`sidebar.search`/`deep-link` 仍为改动前就存在的数据耦合失败。
+
 ## 侧栏分组折叠（2026-11-05）
 
 - 新能力：站点 `#waypoint-list` 按分组分区渲染（`section.wp-group`），分组头可折叠/展开；
