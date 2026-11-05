@@ -382,3 +382,76 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 7. **快捷键首次提示**：第一次按 `G` / `L` 时 toast 说明（`localStorage['ssm.hints.v1']` 只提示一次）。
 8. **「展开」按钮**：列表头新增 `#btn-expand-all` → `sidebar.expandAllGroups()`（折叠乱了时的逃生口）。
 
+
+---
+
+## 10. 瓦片底图（`assets/js/tiles.js`，2026-11-06）
+
+与「单张 PNG + calibration」并列的第二种底图。维度里写了 `tiles` 就走瓦片，没写就**一行不变**地走原来的单张图片逻辑。
+
+### 10.1 配置与 manifest
+
+```jsonc
+"tiles": { "manifest": "tiles/manifest.json" }   // 也接受 "tiles": "tiles/manifest.json"
+```
+
+瓦片 URL 由 manifest 位置推导：`<manifest 所在目录>/tiles/<level>/<x>_<y>.png`。
+manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null → 回退单张图片）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `tileSize` | 瓦片边长（px） |
+| `levels[].level` | 层级号；level 0 的 1 像素 = 1 方块，层级 L 的 1 像素 = 2^L 方块 |
+| `levels[].blocksPerPixel` | 该层 1 像素覆盖的方块数 |
+| `levels[].minX/maxX/minZ/maxZ` | 该层**实际存在**的瓦片列/行范围（闭区间） |
+| `levels[].originBlockX/originBlockZ` | 该层 (0,0) 瓦片左上角的世界坐标 |
+| `worldBlockRange` | 整幅地图的世界范围；`imageWidth = xMax-xMin`、`imageHeight = zMax-zMin`（1 像素 = 1 方块） |
+
+自检：最细层级的栅格尺寸（`cols × tileSize × blocksPerPixel`）必须等于 `worldBlockRange` 的跨度（容差 1 个像素），
+否则整份 manifest 判为不可用（否则瓦片与路径点会整体错位）。
+
+### 10.2 与现有模块的接线
+
+- `app.js`：`applyDimension` 先试 `loadTileset(dim.tiles.manifest)`；
+  成功 → `view.setRasterBase({width: tileset.imageWidth, height: tileset.imageHeight})`，
+  然后把底图切到 `#map-canvas`（`body[data-base="tiles"]`）；
+  失败（或维度没配 tiles）→ 走原来的 `view.setImage(dim.image)`。
+- **投影**：`state.calibration = { xMin, xMax, zMin, zMax, flipZ:false, calibrated:true, source:'tiles' }`
+  （直接来自 manifest），再交给 `createProjection`。`coords.js` 无需改动。
+- **canvas 语义**：CSS 尺寸 = 整幅图片尺寸（由 `MapView._applyImageSize` 设置），
+  所以它和原来的 `<img>` 一样被 `#stage` 的 transform 缩放；`markers / measure / sidebar / popup`
+  完全不用改。canvas 的**位图**尺寸 = 当前层级栅格（`imageWidth/2^L × imageHeight/2^L`）。
+- `handleViewChange` 的 rAF 里调 `tileLayer.update(viewState)`；**必须用当场读到的 `getViewState()`**，
+  不能用 emit 时捕获的那份（同一帧可能有多次变化，过期状态会贴错位置）。
+
+### 10.3 渲染规则
+
+1. **层级选择**：`levelForScale(scale)` 取 `|log2(blocksPerPixel × scale)|` 最小的层级，
+   也就是「1 瓦片像素 ≈ 1 屏幕像素」；同分时取更细的一层。
+2. **只画视口**：把视图矩形的四角换算成图片像素 → 除以 `2^L` → 得到层级栅格矩形 → 只遍历相交的瓦片。
+   瓦片贴图是幂等的，所以**不清屏**：已画好的内容留着，平移回来不用重画。
+3. **像素锐利**：`screenPxPerCanvasPx >= 1`（放大）时 `ctx.imageSmoothingEnabled = false`
+   并给 canvas 加 `image-rendering: pixelated`；缩小时才允许插值。
+4. **404 静默**：瓦片缺失是正常的（全透明瓦片不导出），`img.onerror` 只记进负缓存，不打印、不重试。
+5. **缓存**：已解码图片 `Map<key, HTMLImageElement>`，LRU 上限 `MAX_CACHED_TILES = 400`（约 100 MB）；
+   缺失 key 单独放在 `Set`（上限 `MAX_MISSING_TILES = 4096`），避免反复请求。
+6. **位图上限**：`MAX_CANVAS_PIXELS = 24_000_000`。当前 manifest 的 level 0 是 4096×5120 ≈ 2100 万像素
+   （约 84 MB），仍在上限内；更大的地图会按比例降低位图分辨率（`stats.backingFactor < 1`）。
+
+### 10.4 调试接口与测试
+
+```js
+window.__mapApp.tiles()      // -> { level, blocksPerPixel, scale, canvasWidth/Height, requests,
+                             //      loaded, missing, cache, maxTiles, visibleTiles, drawn, ... }
+window.__mapApp.tileLayer    // TileLayer 实例（只读排障用）
+window.__mapApp.tileset      // Tileset 实例（toJSON() 得到纯数据）
+document.body.dataset.base   // 'tiles' | 'image' | 'empty'
+```
+
+- `tests/smoke.mjs` 的 `tiles.render` / `tiles.levels` 两项覆盖「canvas 出图 + 世界范围来自 manifest」
+  与「层级随缩放切换 + 视口裁剪」。
+- 命中 `#map-image` 的旧断言已改为「当前底图元素」`#map-image:not([hidden]), #map-canvas:not([hidden])`。
+- 缺瓦片的 404 由 `createDiagnostics(page, { ignore })` 放行（`/tiles/tiles/<l>/<x>_<y>.png` 的 404 不算错误），
+  否则 `run.console` 会被正常的缺瓦片刷满。
+- **限制**：瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（会 toast 提示并忽略）；
+  `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
