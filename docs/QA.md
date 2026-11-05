@@ -2,6 +2,31 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 瓦片底图（2026-11-06）
+
+- 新增 `assets/js/tiles.js`（manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存）。`config.json` 里配了 `tiles` 的维度走瓦片，
+  没配的维度保持原来的「单张 PNG + `calibration`」，一行未改。
+- 主世界切到瓦片：世界范围取 `tiles/manifest.json` 的 `worldBlockRange` = X[-2048, 2048]、Z[-3584, 1536]，1 像素 = 1 方块。
+  与原 calibration（`xMin=-2048.5 / zMin=-3584.375`）的像素对齐差是常量 `(0.5, 0.375)`，
+  **15 个路径点的像素位置最大偏移 0.625 px**（所有点相同），远小于 2 px 阈值；像素对齐差异只影响 `focusOrigin` 的取整。
+- 底图元素：瓦片维度用 `<canvas id="map-canvas">`，与 `<img id="map-image">` 共用同一套定位 / 变换语义
+  （CSS 尺寸 = 整幅图片尺寸，位图尺寸 = 当前层级栅格），markers / measure / sidebar / popup 全部零改动。
+- smoke 新增 2 项：
+  - `tiles.render`：`#map-canvas` 可见且 `#map-image` 隐藏、逻辑尺寸 = manifest 跨度、投影范围 = `worldBlockRange`、
+    画布真有像素（整图 level 3 下 58360/327680 不透明）、`drawImage` 次数 > 0、缓存不超上限 ✓
+  - `tiles.levels`：整图 level 3（512px 位图 / 6 张）→ 放大到 1:1 变 level 0（4096px 位图 / 一屏 24 张，全层 320 张）
+    → 缩回 level 2（1024px），层级与 canvas 位图随缩放单调变化 ✓
+- 测试设施：`createDiagnostics(page, { ignore })` 放行缺瓦片的 404（全透明瓦片不导出，属正常）；
+  `#map-image` 的旧断言改成「当前底图元素」选择器，`createDiagnostics` 的 ignore 同样作用于新标签页。
+- 结果：**25 通过 / 5 失败 / 1 跳过**（跳过的仍是「全绿才截图」）。5 项失败与本次无关，仍是数据耦合项
+  （`pos.zoom` / `pos.drag` / `cal.crop-change` / `sidebar.search` / `deep-link`）。
+  整轮 smoke 里瓦片请求 **121 次**，其中 **53 次 404**（全部静默跳过），缓存 68 张（上限 400）。
+- 已知限制：
+  - level 0 的 canvas 位图是 4096×5120（约 84 MB）；`MAX_CANVAS_PIXELS = 2400 万` 是硬上限，更大的导出会自动降位图分辨率。
+  - 瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（toast 提示后忽略），
+    因此 `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
+  - 层级切换会重新分配 canvas 位图（level 0 ↔ level 3），连续跨层级缩放有少量重分配开销。
+
 ## 交互体检修正（2026-11-05）
 
 按"反人类交互"体检结果修的站点侧 8 处，逐条实测（本地无头 Edge）：

@@ -2677,9 +2677,18 @@ async function main() {
   });
 
   /* ---------------- 8. 全程 console error ---------------- */
-  await check('run.console', '整个测试过程无 console error / 未捕获异常 / 未处理 Promise 拒绝', () =>
-    expectNoErrorsSince(0, '全程'),
-  );
+  await check('run.console', '整个测试过程无 console error / 未捕获异常 / 未处理 Promise 拒绝', async () => {
+    const detail = await expectNoErrorsSince(0, '全程');
+    // 顺带把瓦片层的累计数据打出来，方便对照「请求数 / 404 数 / 缓存」
+    const tileStats = await page
+      .evaluate('(window.__mapApp && window.__mapApp.tiles) ? window.__mapApp.tiles() : null')
+      .catch(() => null);
+    if (!tileStats) return detail;
+    return (
+      `${detail}；瓦片请求 ${tileStats.requests} 次（404 ${tileStats.missing}，` +
+      `解码 ${tileStats.loaded}，缓存 ${tileStats.cache}/${tileStats.maxTiles}）`
+    );
+  });
 
   /* ---------------- 9. 截图（仅全程成功时） ---------------- */
   if (rep.failed.length > 0) {
