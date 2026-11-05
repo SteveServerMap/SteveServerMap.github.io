@@ -2933,6 +2933,103 @@ async function main() {
     return `地图 ${narrow.viewport.width.toFixed(0)}px（窗口 ${narrow.innerWidth}px）`;
   });
 
+  /* ---------------- 7b. 主题切换（持久化 + 系统偏好） ---------------- */
+  // 与其它 UI 断言一致：必须真实鼠标点击（合成 .click() 会绕过部分事件路径）。
+  // 结束时把主题、localStorage 与系统偏好模拟全部还原，不影响后续检查。
+  await checkIfReady('theme.toggle', '主题：真实点击切换、localStorage 持久化、系统偏好跟随', async () => {
+    await page.setViewport({ ...VIEWPORT });
+    await page.settle(280);
+    const clickTheme = async () => {
+      const pt = await page.evalFn(() => {
+        const el = document.getElementById('btn-theme');
+        if (!el) throw new Error('缺少 #btn-theme');
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) throw new Error('#btn-theme 不可见');
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y, button: 'none' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      await page.settle(220);
+    };
+    const readState = () => page.evalFn(() => ({
+      theme: document.documentElement.getAttribute('data-theme'),
+      saved: (() => { try { return localStorage.getItem('ssmap-theme'); } catch (e) { return null; } })(),
+      icon: document.querySelector('#btn-theme use')?.getAttribute('href') ?? null,
+      pressed: document.getElementById('btn-theme')?.getAttribute('aria-pressed') ?? null,
+    }));
+    const setScheme = async (scheme) => {
+      await page.send('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-color-scheme', value: scheme }],
+      });
+      await page.settle(420);
+    };
+
+    // 起点状态（--keep 模式下可能有残留保存值），结束时原样恢复
+    const boot = await readState();
+    const bootLight = boot.theme === 'light';
+    const opposite = bootLight ? 'dark' : 'light';
+    const name = (light) => (light ? 'light' : 'dark');
+
+    // 1. 清除保存值后模拟相反系统偏好 → 主题实时跟随
+    await page.evalFn(() => localStorage.removeItem('ssmap-theme'));
+    await setScheme(opposite);
+    let s = await readState();
+    if (s.theme !== opposite) {
+      throw new Error(`无保存值时系统偏好 ${opposite} 应实时跟随，实际 ${s.theme}`);
+    }
+
+    // 2. 真实点击 → 回到起点主题并写入 localStorage，按钮状态同步
+    await clickTheme();
+    s = await readState();
+    if (s.theme !== name(bootLight) || s.saved !== name(bootLight)) {
+      throw new Error(`点击后应为 ${name(bootLight)} 且保存 ${name(bootLight)}，实际 ${JSON.stringify(s)}`);
+    }
+    if (s.icon !== (bootLight ? '#i-moon' : '#i-sun') || s.pressed !== String(bootLight)) {
+      throw new Error(`按钮状态未同步：图标 ${s.icon} / aria-pressed ${s.pressed}`);
+    }
+
+    // 3. 已有保存值后系统偏好再变 → 不跟随
+    await setScheme(opposite);
+    s = await readState();
+    if (s.theme !== name(bootLight)) {
+      throw new Error(`手动选择后系统偏好变化不应覆盖，实际 ${s.theme}`);
+    }
+
+    // 4. 再点一次 → 切到另一主题并保存
+    await clickTheme();
+    s = await readState();
+    if (s.theme !== opposite || s.saved !== opposite) {
+      throw new Error(`再次点击应切到 ${opposite} 并保存，实际 ${JSON.stringify(s)}`);
+    }
+
+    // 5. 还原：主题/按钮/保存值/系统模拟全部回到起点状态
+    await page.evalFn((restore) => {
+      if (restore.saved !== null) localStorage.setItem('ssmap-theme', restore.saved);
+      else localStorage.removeItem('ssmap-theme');
+      document.documentElement.setAttribute('data-theme', restore.theme);
+      const btn = document.getElementById('btn-theme');
+      if (btn) {
+        const light = restore.theme === 'light';
+        btn.setAttribute('aria-pressed', String(light));
+        btn.title = light ? '切换为深色模式' : '切换为浅色模式';
+        const use = btn.querySelector('use');
+        if (use) use.setAttribute('href', light ? '#i-moon' : '#i-sun');
+      }
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', restore.theme === 'light' ? '#e9ede6' : '#0f1210');
+    }, { theme: boot.theme, saved: boot.saved });
+    await page.send('Emulation.setEmulatedMedia', { features: [] });
+    await page.settle(420);
+    s = await readState();
+    if (s.theme !== boot.theme || s.saved !== boot.saved) {
+      throw new Error(
+        `还原后应为 ${JSON.stringify({ theme: boot.theme, saved: boot.saved })}，实际 ${JSON.stringify({ theme: s.theme, saved: s.saved })}`,
+      );
+    }
+    return `跟随系统 ${opposite} → 点击存 ${name(bootLight)} → 系统变化不覆盖 → 再点 ${opposite} → 全部还原`;
+  });
+
   /* ---------------- 8. 全程 console error ---------------- */
   await check('run.console', '整个测试过程无 console error / 未捕获异常 / 未处理 Promise 拒绝', async () => {
     const detail = await expectNoErrorsSince(0, '全程');

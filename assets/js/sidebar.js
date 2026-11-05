@@ -945,7 +945,6 @@ export class Sidebar {
     item.dataset.id = id;
     item.setAttribute('role', 'listitem');
     item.style.setProperty('--marker-color', color);
-    item.style.setProperty('--group-color', (group && group.color) || color);
     if (!this._isGroupVisible(waypoint.group)) item.classList.add('is-muted');
     if (this._activeId === id) {
       item.classList.add('is-active');
@@ -972,11 +971,7 @@ export class Sidebar {
 
     main.append(name, coords);
 
-    const groupTag = document.createElement('span');
-    groupTag.className = 'waypoint-group';
-    groupTag.textContent = group ? group.name || group.id : String(waypoint.group || '默认');
-
-    item.append(icon, main, groupTag);
+    item.append(icon, main);
     return item;
   }
 

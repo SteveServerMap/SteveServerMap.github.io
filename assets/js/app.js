@@ -105,6 +105,7 @@ async function bootstrap() {
     initMarkers();
     initMeasure();
     initConverter();
+    initTheme();
 
     const hash = readHash();
     const startDim = hash.dim || config.defaultDimension;
@@ -1398,6 +1399,46 @@ function toast(message) {
       el.hidden = true;
     }, 220);
   }, 2600);
+}
+
+/* ============================== 主题切换 ============================== */
+
+function initTheme() {
+  const THEME_KEY = 'ssmap-theme';
+  const meta = document.querySelector('meta[name="theme-color"]');
+  const root = document.documentElement;
+  const sysLight = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+
+  const apply = (light, persist) => {
+    root.setAttribute('data-theme', light ? 'light' : 'dark');
+    if (persist) {
+      try { localStorage.setItem(THEME_KEY, light ? 'light' : 'dark'); } catch (err) { /* 隐私模式等场景忽略 */ }
+    }
+    const btn = $('btn-theme');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(light));
+      btn.title = light ? '切换为深色模式' : '切换为浅色模式';
+      const use = btn.querySelector('use');
+      if (use) use.setAttribute('href', light ? '#i-moon' : '#i-sun');
+    }
+    if (meta) meta.setAttribute('content', light ? '#e9ede6' : '#0f1210');
+  };
+
+  // 首屏脚本已按「手动选择 > 系统偏好」设置 data-theme，这里只同步按钮与 meta
+  apply(root.getAttribute('data-theme') === 'light', false);
+
+  bindClick('btn-theme', () => {
+    apply(root.getAttribute('data-theme') !== 'light', true);
+  });
+
+  // 未手动选择过时跟随系统偏好变化
+  if (sysLight && typeof sysLight.addEventListener === 'function') {
+    sysLight.addEventListener('change', (event) => {
+      let saved = null;
+      try { saved = localStorage.getItem(THEME_KEY); } catch (err) { /* ignore */ }
+      if (!saved) apply(event.matches === true, false);
+    });
+  }
 }
 
 /* ============================== 事件绑定 ============================== */
