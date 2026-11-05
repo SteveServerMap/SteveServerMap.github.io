@@ -12,6 +12,3 @@ tests/artifacts/*
 .backups/
 config.json.bak-*
 *.bak-*
-
-# 地图背景图备份
-背景图片备份/
