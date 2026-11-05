@@ -2710,6 +2710,37 @@ async function main() {
     return '÷8 → 10/10 · ×8 → 640/640 · 定位到 640,640';
   });
 
+  // 回归：面板按钮在 #viewport 内，若 viewer.js 的 IGNORE_SELECTOR 漏掉 .convert-panel，
+  // pointerdown 会触发 setPointerCapture，真实鼠标点击永远点不到按钮（合成 .click() 则不受影响）。
+  await checkIfReady('convert.real-click', '换算：方向按钮真实鼠标点击可切换（指针捕获回归）', async () => {
+    await page.evalFn(() => {
+      const p = document.getElementById('convert-panel');
+      if (p.hidden) document.getElementById('btn-convert').click();
+    });
+    await page.settle(320);
+    const clickCenter = async (id) => {
+      const pt = await page.evalFn((sel) => {
+        const el = document.getElementById(sel);
+        if (!el) throw new Error(`缺少 #${sel}`);
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) throw new Error(`#${sel} 不可见`);
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      }, id);
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y, button: 'none' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+      await page.settle(160);
+    };
+    await clickCenter('convert-dir-n');
+    const afterN = await page.evalFn(() => document.getElementById('convert-dir-n').classList.contains('is-active'));
+    if (!afterN) throw new Error('真实点击「下界 → 主世界（×8）」后按钮未激活（viewer 指针捕获吞掉了 click）');
+    await clickCenter('convert-dir-ow');
+    const afterOw = await page.evalFn(() => document.getElementById('convert-dir-ow').classList.contains('is-active'));
+    if (!afterOw) throw new Error('真实点击「主世界 → 下界（÷8）」后按钮未激活');
+    await page.evalFn(() => document.getElementById('convert-close').click());
+    return '真实鼠标点击 ×8 / ÷8 各一次，方向均正确切换';
+  });
+
   await checkIfReady('convert.prefill', '换算：下界维度打开面板自动切 ×8 并预填下界坐标', async () => {
     await page.evalFn(() => window.__mapApp.applyDimension('nether'));
     await page.settle(320);
