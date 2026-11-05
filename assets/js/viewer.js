@@ -31,6 +31,7 @@ const IGNORE_SELECTOR = [
   '.scale-bar',
   '.map-state',
   '.modal',
+  '.measure-readout',
 ].join(', ');
 
 const ANIM_DURATION = 220;      // 视图动画时长（ms，契约要求约 220ms）

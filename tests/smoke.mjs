@@ -2074,6 +2074,88 @@ async function main() {
     return `吸附到「${target.id}」· 撤销/清空正常 · Esc 退出`;
   });
 
+  await checkIfReady('measure.panel', '测距读数面板上的点击/滚轮不会穿透到地图（撤销/清空不误加点）', async () => {
+    await ensureSidebarOpen();
+    const rectOf = (selector) =>
+      page.evalFn((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      }, selector);
+
+    const setup = await page.evalFn(() => {
+      if (!window.__mapApp.state.measureActive) document.getElementById('btn-measure').click();
+      window.__mapApp.clearMeasure();
+      window.__mapApp.addMeasurePoint(0, 0);
+      window.__mapApp.addMeasurePoint(300, 400);
+      return { points: window.__mapApp.measureSummary().points.length };
+    });
+    if (setup.points !== 2) throw new Error(`准备两个测量点失败：${JSON.stringify(setup)}`);
+    await page.settle(200);
+
+    // A) 面板标题区域点一下：不能加测量点
+    const head = await rectOf('#measure-readout .measure-head');
+    if (!head) throw new Error('找不到 #measure-readout .measure-head');
+    await page.click(head.x, head.y);
+    await page.settle(240);
+    const afterPanelClick = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
+    if (afterPanelClick !== 2) {
+      throw new Error(`点面板标题后测量点变成 ${afterPanelClick}（应保持 2，说明点击穿透到地图了）`);
+    }
+
+    // B) 点「撤销」：真撤销一点，且不额外加点
+    const undo = await rectOf('#measure-undo');
+    if (!undo) throw new Error('找不到 #measure-undo');
+    await page.click(undo.x, undo.y);
+    await page.settle(240);
+    const afterUndo = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
+    if (afterUndo !== 1) throw new Error(`点「撤销」后应为 1 个点，实际 ${afterUndo}`);
+
+    // C) 点「清空」：清空
+    const clear = await rectOf('#measure-clear');
+    if (!clear) throw new Error('找不到 #measure-clear');
+    await page.click(clear.x, clear.y);
+    await page.settle(240);
+    const afterClear = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
+    if (afterClear !== 0) throw new Error(`点「清空」后应为 0 个点，实际 ${afterClear}`);
+
+    // D) 面板上滚轮：不缩放地图（面板高度会随内容变化，重新取坐标）
+    const head2 = await rectOf('#measure-readout .measure-head');
+    const scaleBefore = await page.evalFn(() => Number(window.__mapApp.view.getViewState().scale.toFixed(4)));
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head2.x, y: head2.y, button: 'none' });
+    await page.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x: head2.x,
+      y: head2.y,
+      deltaX: 0,
+      deltaY: -300,
+      modifiers: 0,
+      pointerType: 'mouse',
+    });
+    await page.settle(240);
+    const scaleAfter = await page.evalFn(() => Number(window.__mapApp.view.getViewState().scale.toFixed(4)));
+    if (Math.abs(scaleAfter - scaleBefore) > 1e-6) {
+      throw new Error(`面板上滚轮把地图缩放了：${scaleBefore} → ${scaleAfter}`);
+    }
+
+    // E) 地图空白处仍可加点，收尾恢复
+    const viewport = await page.evalFn(() => {
+      const rect = document.getElementById('viewport').getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width * 0.55), y: Math.round(rect.top + rect.height * 0.2) };
+    });
+    await page.click(viewport.x, viewport.y);
+    await page.settle(260);
+    const afterMap = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
+    if (afterMap !== 1) throw new Error(`地图空白处点击应加 1 个点，实际 ${afterMap}`);
+
+    await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.setMeasureActive(false);
+    });
+    return '面板点击/滚轮不穿透 · 撤销与清空生效 · 地图点击正常';
+  });
+
   /* ---------------- 7. 窄屏 ---------------- */
   await checkIfReady(
     'narrow.layout',
