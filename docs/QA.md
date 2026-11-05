@@ -2,6 +2,19 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 测距点击守卫 + 退出面板语义（2026-11-06）
+
+- 现象 1（真 bug）：**没开测距时左键点地图也会加测量点**，而且点击被测量逻辑吞掉，路径点选不中。
+  原因：`app.js` 的 `handleMeasureClick()` 只判断 `!measure || !imagePoint`，没判断 `state.measureActive`；
+  `measure.js` 的 `addPoint()` 也没有 active 守卫。
+- 修复：`handleMeasureClick()` 开头加 `if (!state.measureActive) return false;`；
+  `MeasureLayer.addPoint()` 开头加 `if (!this.active) return null;`（双保险）。
+  调试接口 `window.__mapApp.addMeasurePoint()` 自动进入测距模式，旧脚本/测试不受影响。
+- 现象 2（设计问题）：只要有测量点，点「退出」面板仍可见、看起来「没反应」。
+  修复（上一轮已改、本轮回归）：退出 = 收起面板，测量线/点保留；再点「测距」恢复编辑。
+- 回归：`tests/measure-guards.mjs` 3 项全过（点击不误加点 + 不进入测距点击路径、退出收面板且点保留、再开恢复）；
+  `tests/smoke.mjs` 的 `measure.*` 五项保持通过。
+
 ## 瓦片底图（2026-11-06）
 
 - 新增 `assets/js/tiles.js`（manifest 解析 / 层级选择 / canvas 渲染 / LRU 缓存）。`config.json` 里配了 `tiles` 的维度走瓦片，
@@ -23,6 +36,9 @@
   整轮 smoke 里瓦片请求 **121 次**，其中 **53 次 404**（全部静默跳过），缓存 68 张（上限 400）。
 - 已知限制：
   - level 0 的 canvas 位图是 4096×5120（约 84 MB）；`MAX_CANVAS_PIXELS = 2400 万` 是硬上限，更大的导出会自动降位图分辨率。
+  - （2026-11-06 补充）`Tileset.levelForScale(scale, dpr)` / `TileLayer({ dpr })` 支持设备像素比：
+    站点默认仍传 1（行为不变），工具预览会传 `devicePixelRatio`，高分屏自动选更细层级；
+    dpr 只参与层级选择与插值判定，**不乘进 canvas 位图尺寸**，内存上限不变。
   - 瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（toast 提示后忽略），
     因此 `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
   - 层级切换会重新分配 canvas 位图（level 0 ↔ level 3），连续跨层级缩放有少量重分配开销。

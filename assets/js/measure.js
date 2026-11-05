@@ -95,8 +95,13 @@ export class MeasureLayer {
     return { x: img.px * vs.scale + vs.tx, y: img.py * vs.scale + vs.ty };
   }
 
-  /** 加一个点；返回 {index, segment} —— segment 是「与上一点的距离」（首点为 0） */
+  /**
+   * 加一个点；返回 {index, segment} —— segment 是「与上一点的距离」（首点为 0）。
+   * 未开启测距（this.active === false）时拒绝加点：app.js 的 handleMeasureClick 已有一道守卫，
+   * 这里是第二道保险，保证任何调用方都无法在非测量模式下往图上塞点。
+   */
   addPoint(world) {
+    if (!this.active) return null;
     if (!world || !Number.isFinite(world.x) || !Number.isFinite(world.z)) return null;
     if (this.points.length >= this.maxPoints) {
       this.points.shift();

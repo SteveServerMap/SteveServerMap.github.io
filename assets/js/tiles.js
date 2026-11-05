@@ -123,21 +123,25 @@ export class Tileset {
   }
 
   /**
-   * 按当前缩放挑层级：让「1 瓦片像素 ≈ 1 屏幕像素」。
-   * 缩放 s 时，层级 L 的 1 像素占 s×2^L 屏幕像素，所以取 |log2(2^L · s)| 最小的那层
-   * （等价于 2^L ≈ 1/s）。
+   * 按当前缩放挑层级：让「1 瓦片像素 ≈ 1 屏幕设备像素」。
+   * 缩放 s、设备像素比 dpr 时，层级 L 的 1 像素占 s×2^L×dpr 个设备像素，
+   * 所以取 |log2(2^L · s · dpr)| 最小的那层（等价于 2^L ≈ 1/(s·dpr)）。
+   * dpr 缺省 1，与旧行为完全一致（站点不传 dpr 时不会改变任何层级选择）。
    * @param {number} scale 屏幕 CSS 像素 / 图片像素
+   * @param {number} [dpr] 设备像素比（高分屏传 2 可让 canvas 选到更细的层级，避免发虚）
    * @returns {TileLevel}
    */
-  levelForScale(scale) {
+  levelForScale(scale, dpr = 1) {
     const s = toNum(scale);
+    const ratio = toNum(dpr);
+    const density = ratio > 0 ? ratio : 1;
     if (!(s > 0) || !this.levels.length) {
       return this.levels[0] || null;
     }
     let best = this.levels[0];
     let bestScore = Infinity;
     for (const entry of this.levels) {
-      const score = Math.abs(Math.log2(entry.blocksPerPixel * s));
+      const score = Math.abs(Math.log2(entry.blocksPerPixel * s * density));
       // 分数相同（正好在两层中间）时取更细的那层：宁可多几张瓦片，也不要糊
       if (score < bestScore - 1e-9) {
         best = entry;
@@ -285,11 +289,13 @@ export class TileLayer {
    * @param {object} [options]
    * @param {Tileset|null} [options.tileset]
    * @param {number} [options.maxTiles] 已解码图片的 LRU 上限
+   * @param {number} [options.dpr] 设备像素比；>1 时层级会选得更细、插值判定按设备像素算（默认 1 = 旧行为）
    */
-  constructor(canvas, { tileset = null, maxTiles = MAX_CACHED_TILES } = {}) {
+  constructor(canvas, { tileset = null, maxTiles = MAX_CACHED_TILES, dpr = 1 } = {}) {
     this.canvas = canvas || null;
     this.ctx = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
     this.maxTiles = isNum(maxTiles) && maxTiles > 0 ? Math.floor(maxTiles) : MAX_CACHED_TILES;
+    this._dpr = isNum(dpr) && dpr > 0 ? dpr : 1;
 
     /** @type {Tileset|null} */
     this.tileset = null;
@@ -354,6 +360,24 @@ export class TileLayer {
     return this._active;
   }
 
+  /** 当前设备像素比（1 = 未开启 DPR 感知，与旧行为一致） */
+  get dpr() {
+    return this._dpr;
+  }
+
+  /**
+   * 更新设备像素比：值变了就按当前视图重画（层级与插值判定都会跟着变）。
+   * 不会碰位图尺寸上限（_resizeBacking 仍然只看 MAX_CANVAS_PIXELS）。
+   * @param {number} dpr
+   */
+  setDpr(dpr) {
+    const next = isNum(dpr) && dpr > 0 ? dpr : 1;
+    if (next === this._dpr) return this._dpr;
+    this._dpr = next;
+    if (this._active && this._viewState) this.draw();
+    return this._dpr;
+  }
+
   /** 清空画面与（可选）缓存 */
   reset({ keepCache = true } = {}) {
     this._cancelFrame();
@@ -388,6 +412,7 @@ export class TileLayer {
       level: this._level ? this._level.level : null,
       blocksPerPixel: this._level ? this._level.blocksPerPixel : null,
       scale: this._viewState && isNum(this._viewState.scale) ? this._viewState.scale : null,
+      dpr: this._dpr,
       canvasWidth: this.canvas ? this.canvas.width : 0,
       canvasHeight: this.canvas ? this.canvas.height : 0,
       backingFactor: this._factor,
@@ -432,7 +457,8 @@ export class TileLayer {
     if (!(viewWidth > 0) || !(viewHeight > 0)) return;
 
     const tileset = this.tileset;
-    const level = tileset.levelForScale(scale);
+    const dpr = this._dpr;
+    const level = tileset.levelForScale(scale, dpr);
     if (!level) return;
     if (!this._level || this._level.level !== level.level) {
       this._level = level;
@@ -446,12 +472,13 @@ export class TileLayer {
     const tileSize = tileset.tileSize;
     const destTileSize = tileSize * factor;
 
-    // 1 屏幕像素对应多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
-    const screenPxPerCanvasPx = scale * bpp / factor;
+    // 1 个设备像素对应多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
+    // （dpr 只参与这个判断和层级选择，不参与位图尺寸，避免 MAX_CANVAS_PIXELS 被 dpr² 放大）
+    const screenDevicePxPerCanvasPx = (scale * bpp * dpr) / factor;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.imageSmoothingEnabled = screenPxPerCanvasPx < 1;
+    ctx.imageSmoothingEnabled = screenDevicePxPerCanvasPx < 1;
     if (canvas.style) {
-      canvas.style.imageRendering = screenPxPerCanvasPx >= 1 ? 'pixelated' : 'auto';
+      canvas.style.imageRendering = screenDevicePxPerCanvasPx >= 1 ? 'pixelated' : 'auto';
     }
 
     // 视口在「图片像素」空间的矩形 → 换到层级栅格像素

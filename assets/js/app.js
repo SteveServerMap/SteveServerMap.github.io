@@ -691,7 +691,8 @@ function setMeasureActive(active) {
     btn.classList.toggle('is-active', state.measureActive);
   }
   const panel = $('measure-readout');
-  if (panel) panel.hidden = !state.measureActive && measure.points.length === 0;
+  // 退出 = 收起面板；已有的测量线/点保留在图上，再点「测距」可继续编辑
+  if (panel) panel.hidden = !state.measureActive;
   document.body.classList.toggle('is-measuring', state.measureActive);
   if (state.measureActive) {
     toast('测距已开启：点地图加测量点（点路径点会吸附）· Shift+点路径点看详情 · Backspace 撤销 · Enter/Esc 结束（点会保留）', 'ok', 4600);
@@ -748,6 +749,9 @@ function snapToWaypoint(imagePoint) {
 /** 地图点击：测量模式下加一个测量点（不触发路径点选中） */
 function handleMeasureClick(imagePoint) {
   if (!measure || !imagePoint) return false;
+  // 没开测距时左键点击就是普通地图交互（选中路径点 / 取消选中）。
+  // 少了这个守卫的话，每点一下地图都会悄悄加一个测量点（真 bug：点地图 = 测量）。
+  if (!state.measureActive) return false;
   // Shift+点击：跳出测量语义，直接看这个路径点的详情卡
   if (state.pointerShift) {
     const snapped = snapToWaypoint(imagePoint);
@@ -777,8 +781,7 @@ function updateMeasureReadout() {
   const listEl = $('measure-list');
   if (!measure || !panel || !totalEl) return;
   const summary = measure.summary || { segments: [], total: 0, points: [] };
-  const hasPoints = summary.points.length > 0;
-  panel.hidden = !state.measureActive && !hasPoints;
+  panel.hidden = !state.measureActive; // 未开启测距时面板一律收起（点仍保留在地图上）
   totalEl.textContent = `${formatDistance(summary.total)} 格`;
   if (listEl) {
     listEl.textContent = '';
@@ -1456,6 +1459,8 @@ window.__mapApp = {
   },
   addMeasurePoint: (x, z) => {
     if (!measure) return null;
+    // 调试接口：addPoint 有 active 守卫，这里自动进入测距模式，保持旧测试/脚本可用
+    if (!state.measureActive) setMeasureActive(true);
     const added = measure.addPoint({ x, z });
     updateMeasureReadout();
     return added;

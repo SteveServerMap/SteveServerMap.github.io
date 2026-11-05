@@ -299,6 +299,13 @@ export class MeasureLayer {
 - 交互（app.js 负责）：顶栏 `#btn-measure` 开关；`handleMapClick` 在测距模式下优先加点（不走路径点选中）；
   吸附判定在**图片像素**空间做（`tolPx = 14 / scale`），命中最近路径点则改用该点的世界坐标；
   `Backspace` 撤销、`Enter`/`Esc` 退出；读数面板 `#measure-readout`（总长 / 逐段 / 撤销 / 清空 / 退出）。
+- **两道 active 守卫（2026-11-06 修）**：`handleMeasureClick()` 第一行 `if (!state.measureActive) return false;`，
+  `MeasureLayer.addPoint()` 第一行 `if (!this.active) return null;`。
+  修复前未开测距时点地图也会悄悄加点（且吞掉了路径点选中）；现在非测量模式下的左键点击完全走普通地图交互。
+  调试接口 `window.__mapApp.addMeasurePoint()` 会在加点前自动 `setMeasureActive(true)`，保持脚本兼容。
+- **退出语义（2026-11-06 确认）**：点「退出」= 只收起读数面板，测量点/折线保留在地图上；
+  再点顶栏「测距」恢复面板继续编辑。`setMeasureActive()` 与 `updateMeasureReadout()` 统一用
+  `panel.hidden = !state.measureActive`，不再看「有没有测量点」。
 - 测距模式下 `body.is-measuring` 会禁用 `.marker / .marker-pin / .marker-label` 的 `pointer-events`，
   否则标记会吞掉点击、也没法吸附（与 `.is-picking` 同一套写法）。
 - 调试接口：`window.__mapApp.measure` / `measureSummary()` / `addMeasurePoint(x, z)` / `toggleMeasure()` /
@@ -426,12 +433,14 @@ manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null �
 
 ### 10.3 渲染规则
 
-1. **层级选择**：`levelForScale(scale)` 取 `|log2(blocksPerPixel × scale)|` 最小的层级，
-   也就是「1 瓦片像素 ≈ 1 屏幕像素」；同分时取更细的一层。
+1. **层级选择**：`levelForScale(scale, dpr = 1)` 取 `|log2(blocksPerPixel × scale × dpr)|` 最小的层级，
+   也就是「1 瓦片像素 ≈ 1 **设备**像素」；同分时取更细的一层。
+   `dpr` 缺省为 1，站点侧行为与旧版完全一致；配置与预览工具会传 `devicePixelRatio`，
+   高分屏自动选更细的层级（**不会**把 canvas 位图乘 dpr，内存上限不变）。
 2. **只画视口**：把视图矩形的四角换算成图片像素 → 除以 `2^L` → 得到层级栅格矩形 → 只遍历相交的瓦片。
    瓦片贴图是幂等的，所以**不清屏**：已画好的内容留着，平移回来不用重画。
-3. **像素锐利**：`screenPxPerCanvasPx >= 1`（放大）时 `ctx.imageSmoothingEnabled = false`
-   并给 canvas 加 `image-rendering: pixelated`；缩小时才允许插值。
+3. **像素锐利**：`screenDevicePxPerCanvasPx = scale × blocksPerPixel × dpr / backingFactor >= 1`（放大）时
+   `ctx.imageSmoothingEnabled = false` 并给 canvas 加 `image-rendering: pixelated`；缩小时才允许插值。
 4. **404 静默**：瓦片缺失是正常的（全透明瓦片不导出），`img.onerror` 只记进负缓存，不打印、不重试。
 5. **缓存**：已解码图片 `Map<key, HTMLImageElement>`，LRU 上限 `MAX_CACHED_TILES = 400`（约 100 MB）；
    缺失 key 单独放在 `Set`（上限 `MAX_MISSING_TILES = 4096`），避免反复请求。

@@ -68,7 +68,8 @@ async function main() {
     'assets/js/viewer.js',
     'assets/js/markers.js',
     'assets/js/sidebar.js',
-    'assets/js/calibrate.js',
+    'assets/js/measure.js',
+    'assets/js/tiles.js',
   ];
 
   const fileState = {};
@@ -189,21 +190,11 @@ async function main() {
       'waypoint-list',
       'waypoint-empty',
       'waypoint-count',
-      'group-list',
-      'btn-calibrate',
       'btn-fit',
       'btn-reset',
       'btn-grid',
-      'calibrator',
-      'cal-json',
-      'cal-x-min',
-      'cal-x-max',
-      'cal-z-min',
-      'cal-z-max',
-      'cal-a-px',
-      'cal-b-px',
-      'cal-close',
-      'cal-apply',
+      'btn-measure',
+      'measure-readout',
       'toast',
     ];
     const missing = requiredIds.filter((id) => !new RegExp(`id=["']${id}["']`).test(indexHtml));
@@ -347,7 +338,8 @@ async function main() {
     'assets/js/viewer.js',
     'assets/js/markers.js',
     'assets/js/sidebar.js',
-    'assets/js/calibrate.js',
+    'assets/js/measure.js',
+    'assets/js/tiles.js',
   ].filter((rel) => fileState[rel]);
 
   const jsSources = new Map();
@@ -458,7 +450,8 @@ async function main() {
     'assets/js/viewer.js': ['MapView'],
     'assets/js/markers.js': ['MarkerLayer', 'ICONS'],
     'assets/js/sidebar.js': ['Sidebar'],
-    'assets/js/calibrate.js': ['openCalibrator'],
+    'assets/js/measure.js': ['MeasureLayer', 'distanceBetween', 'formatDistance'],
+    'assets/js/tiles.js': ['Tileset', 'TileLayer', 'parseManifest', 'loadTileset'],
   };
 
   await rep.check('js.module-api', '契约 §2~§6 要求的模块导出名齐全', async () => {
