@@ -96,8 +96,11 @@ export class Tileset {
    * @param {string} params.baseUrl 瓦片根目录（含末尾斜杠）
    * @param {string} [params.manifestUrl]
    * @param {string} [params.source]
+   * @param {string} [params.generatedAt] manifest.generatedAt 原始值（ISO 时间串，供 UI 显示）
    */
-  constructor({ tileSize, levels, bounds, baseUrl, manifestUrl = '', source = '', version = '' }) {
+  constructor({
+    tileSize, levels, bounds, baseUrl, manifestUrl = '', source = '', version = '', generatedAt = '',
+  }) {
     this.tileSize = tileSize;
     this.levels = levels;
     this.bounds = bounds;
@@ -106,6 +109,8 @@ export class Tileset {
     this.source = source;
     /** manifest.generatedAt 净化后的版本串：随瓦片重新生成而变化，用于绕开 HTTP 缓存 */
     this.version = version;
+    /** manifest.generatedAt 原始串：给「瓦片更新于…」这类 UI 显示用（没生成时间就为空串） */
+    this.generatedAt = typeof generatedAt === 'string' ? generatedAt : '';
     /** 图片像素尺寸 = 世界跨度（level 0 的 1 像素 = 1 方块） */
     this.imageWidth = bounds.xMax - bounds.xMin;
     this.imageHeight = bounds.zMax - bounds.zMin;
@@ -173,6 +178,7 @@ export class Tileset {
       manifestUrl: this.manifestUrl,
       source: this.source,
       version: this.version,
+      generatedAt: this.generatedAt,
       imageWidth: this.imageWidth,
       imageHeight: this.imageHeight,
       bounds: { ...this.bounds },
@@ -265,7 +271,38 @@ export function parseManifest(raw, { manifestUrl = DEFAULT_MANIFEST } = {}) {
     manifestUrl,
     source: typeof raw.source === 'string' ? raw.source : '',
     version: String(raw.generatedAt ?? '').replace(/[^A-Za-z0-9._-]/g, ''),
+    generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : '',
   });
+}
+
+/**
+ * 把 manifest.generatedAt 格式化成「更新于 …（相对天数）」。
+ * 纯函数、不碰 DOM，可在 Node 下测试；解析不了时返回空串（调用方隐藏徽标）。
+ * @param {string|undefined|null} iso ISO 时间串
+ * @param {number} [now] 当前时间戳（毫秒，测试注入用）
+ * @returns {string}
+ */
+export function formatGeneratedAt(iso, now = Date.now()) {
+  if (typeof iso !== 'string' || !iso) return '';
+  const time = new Date(iso).getTime();
+  if (!Number.isFinite(time)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const local = new Date(time);
+  const dateText =
+    `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ` +
+    `${pad(local.getHours())}:${pad(local.getMinutes())}`;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfThatDay = new Date(time);
+  startOfThatDay.setHours(0, 0, 0, 0);
+  // Math.round 吸收夏令时导致的 23/25 小时天
+  const dayDiff = Math.round((startOfToday.getTime() - startOfThatDay.getTime()) / dayMs);
+  const relative =
+    dayDiff <= 0 ? '今天'
+    : dayDiff === 1 ? '昨天'
+    : `${dayDiff} 天前`;
+  return `瓦片更新于 ${dateText}（${relative}）`;
 }
 
 /**

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TileLayer, Tileset } from '../assets/js/tiles.js';
+import { TileLayer, Tileset, parseManifest, formatGeneratedAt } from '../assets/js/tiles.js';
 
 function installFakes(t) {
   const images = [];
@@ -156,4 +156,45 @@ test('switching capped levels with identical backing dimensions clears stale til
   images[1].onerror();
   layer.draw();
   assert.equal(ctx.alpha, 0, 'a missing tile must remain transparent');
+});
+
+test('parseManifest carries raw generatedAt onto the Tileset', () => {
+  const raw = {
+    tileSize: 256,
+    generatedAt: '2026-11-05T12:34:56.789Z',
+    source: 'xaero',
+    worldBlockRange: { xMin: 0, xMax: 512, zMin: 0, zMax: 512 },
+    levels: [{
+      level: 0, blocksPerPixel: 1, minX: 0, maxX: 1, minZ: 0, maxZ: 1,
+      cols: 2, rows: 2, originBlockX: 0, originBlockZ: 0,
+    }],
+  };
+  const tileset = parseManifest(raw, { manifestUrl: 'tiles/overworld/manifest.json' });
+  assert.ok(tileset);
+  assert.equal(tileset.generatedAt, '2026-11-05T12:34:56.789Z');
+  assert.equal(tileset.version, '2026-11-05T123456.789Z');
+  assert.equal(tileset.toJSON().generatedAt, '2026-11-05T12:34:56.789Z');
+
+  const noDate = parseManifest({ ...raw, generatedAt: undefined }, { manifestUrl: 'tiles/o/manifest.json' });
+  assert.equal(noDate.generatedAt, '');
+  assert.equal(noDate.version, '');
+});
+
+test('formatGeneratedAt renders local date plus relative day', () => {
+  // 用注入的 now 固定「今天」，避免跨时区/跨日波动：now 为 2026-11-06 中午（本地时区）
+  const now = new Date(2026, 10, 6, 12, 0, 0).getTime();
+  const sameDay = new Date(2026, 10, 6, 8, 5, 0).toISOString();
+  assert.match(formatGeneratedAt(sameDay, now), /^瓦片更新于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}（今天）$/);
+
+  const yesterday = new Date(2026, 10, 5, 23, 59, 0).toISOString();
+  assert.match(formatGeneratedAt(yesterday, now), /（昨天）$/);
+
+  const threeDaysAgo = new Date(2026, 10, 3, 9, 30, 0).toISOString();
+  assert.match(formatGeneratedAt(threeDaysAgo, now), /（3 天前）$/);
+
+  assert.equal(formatGeneratedAt('', now), '');
+  assert.equal(formatGeneratedAt(null, now), '');
+  assert.equal(formatGeneratedAt(undefined, now), '');
+  assert.equal(formatGeneratedAt('not-a-date', now), '');
+  assert.equal(formatGeneratedAt(12345, now), '');
 });

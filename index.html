@@ -41,6 +41,10 @@
       <button id="btn-copy-link" class="btn ghost" type="button" title="复制当前视角链接">
         <svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>分享</span>
       </button>
+      <button id="btn-convert" class="btn ghost" type="button" aria-pressed="false"
+              title="主世界 ↔ 下界坐标换算（1 下界格 = 8 主世界格）">
+        <svg class="icon" aria-hidden="true"><use href="#i-swap"></use></svg><span>换算</span>
+      </button>
     </div>
   </header>
 
@@ -160,6 +164,36 @@
       <ol id="measure-list" class="measure-list"></ol>
       <p id="measure-hint" class="measure-hint">点地图添加测量点 · 可直接点在路径点上（会吸附）</p>
     </div>
+
+    <!-- 坐标换算面板（右下角，点顶栏「换算」打开） -->
+    <div id="convert-panel" class="convert-panel" hidden aria-label="坐标换算">
+      <div class="convert-head">
+        <span class="convert-title">
+          <svg class="icon" aria-hidden="true"><use href="#i-swap"></use></svg>
+          坐标换算
+        </span>
+        <button id="convert-close" class="icon-btn tiny" type="button" aria-label="关闭换算面板" title="关闭 (Esc)">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      <div class="convert-dir" role="group" aria-label="换算方向">
+        <button id="convert-dir-ow" class="convert-dir-btn is-active" type="button" aria-pressed="true">主世界 → 下界（÷8）</button>
+        <button id="convert-dir-n" class="convert-dir-btn" type="button" aria-pressed="false">下界 → 主世界（×8）</button>
+      </div>
+      <div class="convert-inputs">
+        <label class="convert-field"><span>X</span>
+          <input id="convert-x" type="number" step="1" placeholder="0" autocomplete="off" spellcheck="false" inputmode="numeric">
+        </label>
+        <label class="convert-field"><span>Z</span>
+          <input id="convert-z" type="number" step="1" placeholder="0" autocomplete="off" spellcheck="false" inputmode="numeric">
+        </label>
+      </div>
+      <div class="convert-result-row">
+        <span id="convert-result" class="convert-result is-empty">—</span>
+        <button id="convert-copy" class="link-btn" type="button" title="复制换算结果">复制</button>
+        <button id="convert-locate" class="link-btn" type="button" title="把换算结果定位到当前维度地图上">定位</button>
+      </div>
+    </div>
       </div>
     </main>
   </div>
@@ -203,6 +237,7 @@
     <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
     <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/></symbol>
     <symbol id="i-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4v12.5M7 16.5l-3.5-3.5M7 16.5l3.5-3.5M17 20V7.5M17 7.5l-3.5 3.5M17 7.5l3.5 3.5"/></symbol>
   </defs>
 </svg>
 

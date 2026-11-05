@@ -2727,6 +2727,131 @@ body[data-sidebar="collapsed"] .sidebar,
   }
 }
 
+/* 坐标换算面板（右下角） */
+.convert-panel {
+  position: absolute;
+  right: 14px;
+  bottom: 52px;
+  z-index: 6;
+  width: min(300px, calc(100% - 28px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong, #3a473c);
+  background: rgba(10, 14, 11, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text, #e8efe8);
+  font-size: 12px;
+}
+
+.convert-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.convert-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+.convert-title .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--accent, #5ad26f);
+}
+
+.convert-head .icon-btn {
+  margin-left: auto;
+}
+
+.convert-dir {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.convert-dir-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong, #3a473c);
+  background: transparent;
+  color: var(--muted, #93a394);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.convert-dir-btn.is-active {
+  color: var(--accent, #5ad26f);
+  border-color: rgba(90, 210, 111, 0.55);
+  background: rgba(90, 210, 111, 0.12);
+}
+
+.convert-inputs {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.convert-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted, #93a394);
+}
+
+.convert-field input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong, #3a473c);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text, #e8efe8);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+.convert-field input:focus {
+  outline: none;
+  border-color: rgba(90, 210, 111, 0.55);
+}
+
+.convert-result-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.convert-result {
+  flex: 1;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  color: var(--accent, #5ad26f);
+  font-weight: 700;
+}
+
+.convert-result.is-empty {
+  color: var(--muted, #93a394);
+  font-weight: 400;
+}
+
+@media (max-width: 860px) {
+  .convert-panel {
+    right: 8px;
+    bottom: 44px;
+    width: auto;
+    left: 8px;
+  }
+}
+
 /* 测距模式：标记不再拦截点击（否则点不到标记位置，也没法吸附）。
    注意 .marker-pin / .marker-label 自己声明了 pointer-events:auto，
    只写 .marker 拦不住子元素，必须一并禁用（和 .is-picking 同一套写法）。 */

@@ -15,7 +15,8 @@ import { MapView } from './viewer.js';
 import { MarkerLayer } from './markers.js';
 import { MeasureLayer, formatDistance } from './measure.js';
 import { Sidebar } from './sidebar.js';
-import { TileLayer, loadTileset } from './tiles.js';
+import { TileLayer, loadTileset, formatGeneratedAt } from './tiles.js';
+import { ConverterPanel } from './converter.js';
 
 /* ============================== 小工具 ============================== */
 
@@ -73,6 +74,8 @@ let toastTimer = null;
 let hashTimer = null;
 /** @type {TileLayer|null} 瓦片底图渲染器（只有配置了 tiles 的维度才会激活） */
 let tileLayer = null;
+/** @type {ConverterPanel|null} 主世界 ↔ 下界坐标换算面板 */
+let converter = null;
 
 
 /* ============================== 启动 ============================== */
@@ -101,6 +104,7 @@ async function bootstrap() {
     initSidebar();
     initMarkers();
     initMeasure();
+    initConverter();
 
     const hash = readHash();
     const startDim = hash.dim || config.defaultDimension;
@@ -689,6 +693,41 @@ function initMeasure() {
   if (!overlay) return;
   measure = new MeasureLayer(overlay);
   tryCall(measure, 'setProjection', state.projection);
+}
+
+/* ============================== 坐标换算 ============================== */
+
+function initConverter() {
+  const panelEl = $('convert-panel');
+  if (!panelEl) return;
+  converter = new ConverterPanel(panelEl, {
+    getCenter: worldAtViewCenter,
+    onLocate: (x, z) => gotoWorld(x, z, { animate: true }),
+    onCopy: () => toast('已复制换算结果'),
+  });
+  const btn = $('btn-convert');
+  if (btn) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const next = !converter.isOpen();
+      converter.setOpen(next, next ? { prefill: worldAtViewCenter() || undefined } : {});
+      btn.setAttribute('aria-pressed', next ? 'true' : 'false');
+      btn.classList.toggle('is-active', next);
+      if (next) toast('换算：主世界 ÷8 ↔ 下界 ×8，打开时已预填当前视野中心', 'info', 3200);
+    });
+  }
+}
+
+/** 当前视图中心的世界坐标（换算面板的预填值） */
+function worldAtViewCenter() {
+  const proj = state.projection;
+  const vs = safeViewState();
+  if (!proj || !vs || !(vs.scale > 0)) return null;
+  const imgX = (vs.viewWidth / 2 - vs.tx) / vs.scale;
+  const imgY = (vs.viewHeight / 2 - vs.ty) / vs.scale;
+  const world = proj.imageToWorld(imgX, imgY);
+  if (!world || !Number.isFinite(world.x) || !Number.isFinite(world.z)) return null;
+  return { x: Math.round(world.x), z: Math.round(world.z) };
 }
 
 function isMeasureActive() {
@@ -1312,9 +1351,12 @@ function showFatalConfigError(error) {
 function updateFooterStatus() {
   const el = $('footer-status');
   if (!el) return;
-  el.hidden = true;
-  el.textContent = '';
-  el.onclick = null;
+  const text =
+    state.tileset && state.tileset.generatedAt
+      ? formatGeneratedAt(state.tileset.generatedAt)
+      : '';
+  el.hidden = !text;
+  el.textContent = text;
 }
 
 function toast(message) {
@@ -1434,6 +1476,10 @@ window.__mapApp = {
   get measure() {
     return measure;
   },
+  get converter() {
+    return converter;
+  },
+  worldAtViewCenter,
   measureSummary: () => (measure ? measure.summary : null),
   toggleMeasure,
   setMeasureActive,
