@@ -2,6 +2,29 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 瓦片底图改为视口渲染（2026-11-06）
+
+- 背景：主世界瓦片 level 0 栅格 47104×10240（约 4.8 亿像素）。旧渲染器把整幅地图画进一张 backing canvas，
+  超过 `MAX_CANVAS_PIXELS`（2400 万）上限后按比例降采样（backingFactor ≈ 0.22），放大时只剩约 1/5 细节，
+  表现为「瓦片图很糊」。
+- 变更（`assets/js/tiles.js`）：TileLayer 改为**视口渲染**——backing canvas 位图 = 视口 × dpr（超过上限才降采样），
+  canvas 的 CSS 盒 = 视口在图片像素空间里的矩形（随视图平移/缩放内联更新 left/top/width/height），
+  每帧只绘制与视口相交的瓦片（dx/dy = 瓦片世界像素位置 − 视口原点，再 × scale×dpr×factor）。
+  放大时 `image-rendering: pixelated` 关插值，缩小时允许平滑；整图不再整张驻留显存。
+- 配套改动：
+  - `viewer.js`：`_applyImageSize` 跳过瓦片 canvas（其 CSS 盒由 TileLayer 按视口接管）；
+  - `docs/CONTRACT.md` §10.2/§10.3 改为视口渲染语义（位图=视口×dpr、层级选择公式不变、只画视口、像素上限语义变化）；
+  - `tests/smoke.mjs`：`IMAGE_INFO` 的 rect 改读 `#stage`（瓦片 canvas 盒现在是视口大小）；`tiles.render`
+    不透明像素阈值随 `stats.drawn` 缩放；`tiles.levels` 改为断言「位图恒为视口 × dpr，不随层级放大」。
+- 回归：站点单测 **69/69**、`static-checks.mjs` **30/30**；`smoke.mjs` 渲染相关项全部通过（`tiles.render` /
+  `tiles.levels` / `dim.switch` / 全程无 console error），并且 `tiles.levels` 从旧代码的失败变为通过。
+- 已知数据耦合（非代码问题）：`smoke.mjs` 有 6 项失败（`pos.initial` / `pos.zoom` / `pos.drag` /
+  `cal.crop-change` / `sidebar.click` / `deep-link`）。原因是 2026-11-06 13:34 主世界瓦片重新生成后，
+  `tiles/overworld/manifest.json` 的 `worldBlockRange` 扩为 X[-39424, 7680] Z[-6656, 3584]，
+  而 `config.json` 的 overworld `calibration` 仍是旧值（X±2048 / Z[-3584, 1536]）；这 6 项用 config.calibration
+  手算期望位置，与应用实际使用的 manifest 投影系统性偏移。已用「旧代码 + 同一份数据」基线复跑确认同样失败
+  （基线 28 通过 / 7 失败，其中 6 项与视口版完全一致）。同步 `config.json` 校准值后即可恢复全绿。
+
 ## 下界与末地切换为瓦片底图（2026-11-06）
 
 - 变更：`config.json` 给 `nether`、`the_end` 补上 `tiles`（`tiles/nether/manifest.json`、`tiles/the_end/manifest.json`），

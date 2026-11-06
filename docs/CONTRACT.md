@@ -428,9 +428,13 @@ manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null �
   失败（或维度没配 tiles）→ 走原来的 `view.setImage(dim.image)`。
 - **投影**：`state.calibration = { xMin, xMax, zMin, zMax, flipZ:false, calibrated:true, source:'tiles' }`
   （直接来自 manifest），再交给 `createProjection`。`coords.js` 无需改动。
-- **canvas 语义**：CSS 尺寸 = 整幅图片尺寸（由 `MapView._applyImageSize` 设置），
-  所以它和原来的 `<img>` 一样被 `#stage` 的 transform 缩放；`markers / measure / sidebar / popup`
-  完全不用改。canvas 的**位图**尺寸 = 当前层级栅格（`imageWidth/2^L × imageHeight/2^L`）。
+- **canvas 语义（视口渲染）**：canvas 的 CSS 盒 = 当前视口在「图片像素」空间里的矩形
+  （`left/top = -tx/scale`、`width/height = viewWidth/scale`，由 `TileLayer.draw()` 内联设置），
+  靠 `#stage` 的 transform 映射回屏幕视口；`#stage` 的尺寸仍是整幅图片尺寸
+  （由 `MapView._applyImageSize` 设置，只摆 `<img>`，不碰瓦片 canvas），
+  `markers / measure / sidebar / popup` 完全不用改。canvas 的**位图**尺寸 = 视口 × dpr，
+  与层级无关 —— 位图与屏幕 1:1，瓦片按需放大/缩小绘制，大图永远不会被整图降采样。
+  宿主必须给瓦片 canvas 绝对定位（`.map-canvas { position: absolute; }`）。
 - `handleViewChange` 的 rAF 里调 `tileLayer.update(viewState)`；**必须用当场读到的 `getViewState()`**，
   不能用 emit 时捕获的那份（同一帧可能有多次变化，过期状态会贴错位置）。
 
@@ -439,16 +443,19 @@ manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null �
 1. **层级选择**：`levelForScale(scale, dpr = 1)` 取 `|log2(blocksPerPixel × scale × dpr)|` 最小的层级，
    也就是「1 瓦片像素 ≈ 1 **设备**像素」；同分时取更细的一层。
    `dpr` 缺省为 1，站点侧行为与旧版完全一致；配置与预览工具会传 `devicePixelRatio`，
-   高分屏自动选更细的层级（**不会**把 canvas 位图乘 dpr，内存上限不变）。
+   高分屏自动选更细的层级。
 2. **只画视口**：把视图矩形的四角换算成图片像素 → 除以 `2^L` → 得到层级栅格矩形 → 只遍历相交的瓦片。
-   瓦片贴图是幂等的，所以**不清屏**：已画好的内容留着，平移回来不用重画。
-3. **像素锐利**：`screenDevicePxPerCanvasPx = scale × blocksPerPixel × dpr / backingFactor >= 1`（放大）时
+   每帧先清屏再贴当前视口的瓦片（半透明像素不能反复叠加，层级切换也不能留下旧内容）。
+   瓦片目标尺寸 = `tileSize × 2^L × scale × dpr × backingFactor`，位置按
+   `((originOffset + col × tileSize) × 2^L - 视口原点) × scale × dpr × backingFactor` 计算。
+3. **像素锐利**：`canvasPxPerTilePx = 2^L × scale × dpr × backingFactor >= 1`（放大）时
    `ctx.imageSmoothingEnabled = false` 并给 canvas 加 `image-rendering: pixelated`；缩小时才允许插值。
 4. **404 静默**：瓦片缺失是正常的（全透明瓦片不导出），`img.onerror` 只记进负缓存，不打印、不重试。
 5. **缓存**：已解码图片 `Map<key, HTMLImageElement>`，LRU 上限 `MAX_CACHED_TILES = 400`（约 100 MB）；
    缺失 key 单独放在 `Set`（上限 `MAX_MISSING_TILES = 4096`），避免反复请求。
-6. **位图上限**：`MAX_CANVAS_PIXELS = 24_000_000`。当前 manifest 的 level 0 是 4096×5120 ≈ 2100 万像素
-   （约 84 MB），仍在上限内；更大的地图会按比例降低位图分辨率（`stats.backingFactor < 1`）。
+6. **位图上限**：`MAX_CANVAS_PIXELS = 24_000_000`，作用于「视口 × dpr」而不是整幅地图。
+   4K 屏幕 dpr=1 约 830 万像素，远在上限内；只有超高分屏（如 4K × dpr 2）才会触发
+   等比降采样兜底（`stats.backingFactor < 1`）。
 
 ### 10.4 调试接口与测试
 

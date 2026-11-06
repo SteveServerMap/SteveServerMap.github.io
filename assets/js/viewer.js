@@ -493,7 +493,8 @@ export class MapView {
       this.stage.style.width = `${width}px`;
       this.stage.style.height = `${height}px`;
     }
-    if (this.imageEl) {
+    // 瓦片底图的 <canvas> 由 TileLayer 按视口摆放 CSS 盒（视口渲染），这里只摆 <img>
+    if (this.imageEl && this.imageEl !== this.canvasEl) {
       this.imageEl.style.width = `${width}px`;
       this.imageEl.style.height = `${height}px`;
       this.imageEl.style.maxWidth = 'none';

@@ -17,14 +17,16 @@
  *   - 每个层级自带 originBlockX/Z（该层级 (0,0) 瓦片左上角的世界坐标），
  *     正常情况下等于 worldBlockRange 的左上角，代码按差值做偏移，不假设两者相等。
  *
- * 渲染策略：
- *   - <canvas> 的 CSS 尺寸 = 整幅图片尺寸（由 MapView 设置），所以它和原来的 <img>
- *     一样被 #stage 的 transform 缩放，markers / measure / sidebar / popup 全部不用改；
- *   - canvas 的**位图**尺寸 = 当前层级的整幅栅格（imageWidth/2^L × imageHeight/2^L），
- *     每个瓦片按 256×256 原样贴上去 → 不缩放、不插值；
- *   - 每帧先清屏，再贴「当前视口覆盖到的瓦片」，避免半透明像素反复叠加，
- *     也避免层级切换后留下旧栅格内容；
- *   - 放大（1 瓦片像素 > 1 屏幕像素）时关掉 imageSmoothingEnabled，保持像素锐利；
+ * 渲染策略（视口渲染）：
+ *   - canvas 的 CSS 盒 = 当前视口在「图片像素」空间里的矩形（left/top = -tx/scale，
+ *     width/height = viewWidth/scale），由 #stage 的 transform 映射回屏幕视口，
+ *     因此位图与屏幕 1:1 —— 位图多大、瓦片画多大就多大，绝不整图降采样；
+ *   - canvas 的**位图**尺寸 = 视口尺寸 × dpr（超出 MAX_CANVAS_PIXELS 时才等比降），
+ *     与层级 / 世界尺寸无关；宿主必须给 canvas 绝对定位（position: absolute）；
+ *   - 每帧先清屏，再按当前层级贴「视口覆盖到的瓦片」，瓦片按
+ *     tileSize × blocksPerPixel × scale × dpr 的目标尺寸绘制（可放大可缩小），
+ *     避免半透明像素反复叠加，也避免层级切换后留下旧栅格内容；
+ *   - 放大（1 瓦片像素 ≥ 1 canvas 像素）时关掉 imageSmoothingEnabled，保持像素锐利；
  *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），一律静默跳过；
  *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求；
  *   - 瓦片 URL 带 ?v=<manifest.generatedAt> 版本参数：瓦片重新生成后 URL 变化，
@@ -38,8 +40,9 @@ export const MAX_CACHED_TILES = 400;
 export const MAX_MISSING_TILES = 4096;
 
 /**
- * canvas 位图的像素上限。level 0 的整幅栅格就是 4096×5120 ≈ 2100 万像素（约 84 MB），
- * 这个上限保证再大的地图也不会把显卡/内存撑爆（超出时按比例降低位图分辨率）。
+ * canvas 位图的像素上限（视口渲染下 = 视口 × dpr 的像素数，约等于一个高清屏的量级）。
+ * 4K 屏幕 dpr=1 时约 830 万像素，远在上限内；只有超高分屏（如 4K × dpr 2）才会触发
+ * 等比降采样兜底 —— 该上限保证任何视口都不会把显卡/内存撑爆。
  */
 export const MAX_CANVAS_PIXELS = 24_000_000;
 
@@ -69,6 +72,12 @@ export function tileBaseFromManifest(manifestUrl = DEFAULT_MANIFEST) {
   const url = String(manifestUrl || DEFAULT_MANIFEST);
   const dir = url.includes('/') ? url.slice(0, url.lastIndexOf('/') + 1) : '';
   return `${dir}tiles/`;
+}
+
+/** CSS 盒写入取整到 1e-4：视觉上无损，但避免每帧产生不同的样式字符串 */
+function roundPx(value) {
+  const rounded = Math.round(value * 10000) / 10000;
+  return Object.is(rounded, -0) ? 0 : rounded;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -333,11 +342,11 @@ export async function loadTileset(url = DEFAULT_MANIFEST) {
 
 export class TileLayer {
   /**
-   * @param {HTMLCanvasElement} canvas 底图 canvas（CSS 尺寸由 MapView 设置）
+   * @param {HTMLCanvasElement} canvas 底图 canvas（必须是绝对定位；CSS 盒与位图尺寸都由本类按视口设置）
    * @param {object} [options]
    * @param {Tileset|null} [options.tileset]
    * @param {number} [options.maxTiles] 已解码图片的 LRU 上限
-   * @param {number} [options.dpr] 设备像素比；>1 时层级会选得更细、插值判定按设备像素算（默认 1 = 旧行为）
+   * @param {number} [options.dpr] 设备像素比；>1 时层级会选得更细、位图按设备像素渲染（默认 1 = 旧行为）
    */
   constructor(canvas, { tileset = null, maxTiles = MAX_CACHED_TILES, dpr = 1 } = {}) {
     this.canvas = canvas || null;
@@ -357,7 +366,7 @@ export class TileLayer {
 
     this._active = false;
     this._level = null;      // 当前层级对象
-    this._factor = 1;        // canvas 像素 / 层级栅格像素（内存超限时 < 1）
+    this._factor = 1;        // canvas 像素 / 视口像素（位图超上限时 < 1）
     this._viewState = null;
     this._raf = 0;
     this._destroyed = false;
@@ -416,7 +425,7 @@ export class TileLayer {
 
   /**
    * 更新设备像素比：值变了就按当前视图重画（层级与插值判定都会跟着变）。
-   * 不会碰位图尺寸上限（_resizeBacking 仍然只看 MAX_CANVAS_PIXELS）。
+   * 位图尺寸跟着视口 × dpr 走，仍然受 MAX_CANVAS_PIXELS 上限兜底。
    * @param {number} dpr
    */
   setDpr(dpr) {
@@ -510,39 +519,41 @@ export class TileLayer {
     const dpr = this._dpr;
     const level = tileset.levelForScale(scale, dpr);
     if (!level) return;
-    if (!this._level || this._level.level !== level.level) {
-      this._level = level;
-      this._resizeBacking(level);
-    }
+    this._level = level;
+    this._resizeBacking(viewWidth, viewHeight);
 
     const bpp = level.blocksPerPixel;
     const factor = this._factor;
     const canvas = this.canvas;
     const ctx = this.ctx;
     const tileSize = tileset.tileSize;
-    const destTileSize = tileSize * factor;
 
-    // 1 个设备像素对应多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
-    // （dpr 只参与这个判断和层级选择，不参与位图尺寸，避免 MAX_CANVAS_PIXELS 被 dpr² 放大）
-    const screenDevicePxPerCanvasPx = (scale * bpp * dpr) / factor;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.imageSmoothingEnabled = screenDevicePxPerCanvasPx < 1;
+    // 视口渲染：CSS 盒 = 视口在图片像素空间里的矩形（#stage 的 transform 会把它
+    // 映射回屏幕视口），位图 = 视口 × dpr，所以 canvas 像素与屏幕设备像素 1:1。
+    const x0 = -tx / scale;
+    const y0 = -ty / scale;
+    const kk = scale * dpr * factor; // canvas 像素 / 图片像素
     if (canvas.style) {
-      canvas.style.imageRendering = screenDevicePxPerCanvasPx >= 1 ? 'pixelated' : 'auto';
+      canvas.style.left = `${roundPx(x0)}px`;
+      canvas.style.top = `${roundPx(y0)}px`;
+      canvas.style.width = `${roundPx(viewWidth / scale)}px`;
+      canvas.style.height = `${roundPx(viewHeight / scale)}px`;
     }
 
-    // 视口在「图片像素」空间的矩形 → 换到层级栅格像素
-    // 注意：x0/y0 是图片像素（0..imageWidth），不是世界坐标；世界坐标只在 originOffset 里出现
-    const x0 = (-tx) / scale;
-    const y0 = (-ty) / scale;
-    const x1 = (viewWidth - tx) / scale;
-    const y1 = (viewHeight - ty) / scale;
+    // 1 个瓦片像素占多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
+    const canvasPxPerTilePx = bpp * kk;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = canvasPxPerTilePx < 1;
+    if (canvas.style) {
+      canvas.style.imageRendering = canvasPxPerTilePx >= 1 ? 'pixelated' : 'auto';
+    }
 
+    // 视口与地图的交集（钳制到地图范围，和瓦片裁剪一致）
     const clampX0 = Math.max(x0, 0);
     const clampY0 = Math.max(y0, 0);
-    const clampX1 = Math.min(x1, tileset.imageWidth);
-    const clampY1 = Math.min(y1, tileset.imageHeight);
+    const clampX1 = Math.min(x0 + viewWidth / scale, tileset.imageWidth);
+    const clampY1 = Math.min(y0 + viewHeight / scale, tileset.imageHeight);
 
     this._drawn = 0;
     if (!(clampX1 > clampX0) || !(clampY1 > clampY0)) {
@@ -551,7 +562,8 @@ export class TileLayer {
       return;
     }
 
-    // 层级栅格像素（= 图片像素 / bpp），瓦片 (x,y) 占 [x*tileSize, (x+1)*tileSize)
+    // 层级栅格像素（= 图片像素 / bpp）：瓦片 (col,row) 的左缘在图片像素空间里位于
+    // (originOffsetX + col * tileSize) * bpp。世界坐标只在 originOffset 里出现。
     const originOffsetX = (level.originBlockX - tileset.bounds.xMin) / bpp;
     const originOffsetZ = (level.originBlockZ - tileset.bounds.zMin) / bpp;
     const gx0 = clampX0 / bpp;
@@ -570,10 +582,11 @@ export class TileLayer {
         visible += 1;
         const img = this._loadTile(level, col, row);
         if (!img) continue;
-        const dx = (originOffsetX + col * tileSize) * factor;
-        const dy = (originOffsetZ + row * tileSize) * factor;
+        const dx = ((originOffsetX + col * tileSize) * bpp - x0) * kk;
+        const dy = ((originOffsetZ + row * tileSize) * bpp - y0) * kk;
+        const dsize = tileSize * bpp * kk;
         try {
-          ctx.drawImage(img, dx, dy, destTileSize, destTileSize);
+          ctx.drawImage(img, dx, dy, dsize, dsize);
           this._drawn += 1;
         } catch (err) {
           // 极少见（图片被解绑 / 解码失败）：静默跳过这一张
@@ -584,18 +597,17 @@ export class TileLayer {
     this._draws += 1;
   }
 
-  /** 按层级调整 canvas 位图尺寸；超出内存上限时等比降低分辨率 */
-  _resizeBacking(level) {
+  /** 按视口尺寸调整 canvas 位图：视口 × dpr，超出像素上限时等比降低 */
+  _resizeBacking(viewWidth, viewHeight) {
     const canvas = this.canvas;
-    const tileset = this.tileset;
-    if (!canvas || !tileset) return;
-    const width = Math.ceil(tileset.imageWidth / level.blocksPerPixel);
-    const height = Math.ceil(tileset.imageHeight / level.blocksPerPixel);
-    const pixels = width * height;
+    if (!canvas) return;
+    const baseWidth = Math.ceil(viewWidth * this._dpr);
+    const baseHeight = Math.ceil(viewHeight * this._dpr);
+    const pixels = baseWidth * baseHeight;
     this._factor = pixels > MAX_CANVAS_PIXELS ? Math.sqrt(MAX_CANVAS_PIXELS / pixels) : 1;
 
-    const nextWidth = Math.max(1, Math.round(width * this._factor));
-    const nextHeight = Math.max(1, Math.round(height * this._factor));
+    const nextWidth = Math.max(1, Math.round(baseWidth * this._factor));
+    const nextHeight = Math.max(1, Math.round(baseHeight * this._factor));
     if (canvas.width !== nextWidth) canvas.width = nextWidth;
     if (canvas.height !== nextHeight) canvas.height = nextHeight;
     // 改 canvas.width 会重置上下文状态并清空内容，draw() 里会重新设好
