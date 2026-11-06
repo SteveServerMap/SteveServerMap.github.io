@@ -541,16 +541,12 @@ export class TileLayer {
     }
 
     // 1 个瓦片像素占多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
-    // 但用户交互中（拖拽 / 捏合 / 动画）必须开双线性：nearest 会把瓦片栅格逐帧
-    // 重锚到整数 canvas 像素，画面上看就是 1px 台阶式移动（拖起来抖）；
-    // 双线性让画面以亚像素精度连续移动，静止后再回到 nearest 恢复锐利。
     const canvasPxPerTilePx = bpp * kk;
-    const smooth = canvasPxPerTilePx < 1 || vs.interacting === true;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.imageSmoothingEnabled = smooth;
+    ctx.imageSmoothingEnabled = canvasPxPerTilePx < 1;
     if (canvas.style) {
-      canvas.style.imageRendering = smooth ? 'auto' : 'pixelated';
+      canvas.style.imageRendering = canvasPxPerTilePx >= 1 ? 'pixelated' : 'auto';
     }
 
     // 视口与地图的交集（钳制到地图范围，和瓦片裁剪一致）

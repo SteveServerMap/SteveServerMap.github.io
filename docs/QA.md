@@ -29,25 +29,14 @@
      「图片像素坐标 × 舍入误差」的系统偏差（fit 视图 39430px 处 = 1.65px）。
      修复：两个换算函数与 DOM 共用同一份 n4 舍入状态（`_renderState()`），
      标记 / 点击命中与渲染图片逐像素对齐（实测偏差 0.004px）。
-- 回归：站点单测 **74/74**、`static-checks.mjs` **30/30**、`smoke.mjs` **39/39**（含 `tiles.render` /
+- 回归：站点单测 **69/69**、`static-checks.mjs` **30/30**、`smoke.mjs` **39/39**（含 `tiles.render` /
   `tiles.levels` / `dim.switch` / `pos.*` / 全程无 console error；`tiles.levels` 从旧代码的失败变为通过）。
 - 已知数据缺口（非代码问题）：`tiles/overworld/tiles/6/1_0.png` 磁盘缺失但 manifest 声称存在
   （2026-11-06 14:10 瓦片重生成的数据缺口），配置工具 e2e `c2-page` 因 404 失败，需重新生成该瓦片或修 manifest。
 
-## 拖动抖动：交互中平滑、静止时锐利（2026-11-06）
-
-- 现象：视口渲染上线后拖动地图画面抖动。实测排除性能因素（16.7ms 零掉帧、每帧绘制 0.02ms），
-  截图互相关对照证实旧画面以**整数 1px 台阶**移动（位移恒为整数、残差 0），速度在 3/4px 间脉动。
-- 根因：放大时 `imageSmoothingEnabled = false`（nearest）让 `drawImage` 把瓦片栅格逐帧重锚到整数 canvas 像素，
-  屏幕画面位置 = `round(tx + const)`。`tx` 与标记（0.25px 阈值）连续移动，画面却按 1px 台阶走，
-  每帧速度忽快忽慢（60Hz 下感知为抖动）；放大倍率越高（像素块越大）越明显。
-- 修复（标准像素渲染技法：交互中平滑、静止锐利）：
-  - `viewer.js`：`getViewState()` 新增 `interacting`（拖拽 / 捏合 / 动画中为 true）；
-    拖拽结束（`drag.moved`）、捏合松指、pointercancel 各补一次视图通知，让瓦片层切回 nearest 再画一帧锐利画面。
-  - `tiles.js`：`draw()` 采样改为 `interacting ? 双线性 : （放大 ? nearest : 双线性）`，
-    交互中画面以亚像素精度连续移动（实测位移 19.48~19.93 亚像素、残差 0.46~1.25 柔化），静止后恢复锐利。
-- 回归：站点单测 **74/74**（新增 5 条：tiles 采样切换 1 + viewer interacting 生命周期 4）、
-  `static-checks.mjs` **30/30**、`smoke.mjs` **39/39**。
+> 2026-11-06 曾上线「交互中双线性」修复拖动抖动，实测亚像素连续但放大时拖动画面发糊
+> （双线性柔化是逐帧重光栅化下连续与锐利不可兼得的代价），已回退；后续改走
+> 「拖动期间复用锐利位图 + CSS 亚像素平移」方案。
 
 ## 下界与末地切换为瓦片底图（2026-11-06）
 
@@ -380,7 +369,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
-| 2026-11-06 14:10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 74 通过 / 0 失败（`node --test tests/*.test.mjs`）；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.4 s）** |
+| 2026-11-06 14:10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 69 通过 / 0 失败（`node --test tests/*.test.mjs`）；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.4 s）** |
 | 2026-11-05 02:05（Asia/Shanghai） | Node v24.18.0 / Windows x64 / Edge 155.0.4283.62 / 视口 1440×900 | **smoke 28 通过 / 0 失败 / 0 跳过 / 0 警告，22.4 s（本地服务）** |
 | 同一轮 | 线上 GitHub Pages `https://steveservermap.github.io/index.html` | **smoke 28 通过 / 0 失败，26.7 s**（`--url=` 外部服务模式） |
 | 同一轮 | — | **static-checks 30 通过 / 0 失败，19 ms** |

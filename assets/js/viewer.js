@@ -534,14 +534,7 @@ export class MapView {
       viewHeight: height,
       imageWidth: this._imageSize ? this._imageSize.width : 0,
       imageHeight: this._imageSize ? this._imageSize.height : 0,
-      // 正在拖拽 / 捏合 / 动画中：瓦片层据此切换插值（交互时平滑、静止时 nearest 锐利）
-      interacting: this._interacting(),
     };
-  }
-
-  /** 是否处于用户交互中（拖拽 / 捏合 / 过渡动画） */
-  _interacting() {
-    return Boolean(this._drag || this._pinch || this._anim);
   }
 
   /**
@@ -1075,11 +1068,7 @@ export class MapView {
 
     // 捏合期间松手：不触发点击
     if (this._pinch) {
-      if (this._pointers.size < 2) {
-        this._pinch = null;
-        // 交互结束：补一次视图通知，让瓦片层从「平滑插值」切回「nearest 锐利」再画一帧
-        this._emit();
-      }
+      if (this._pointers.size < 2) this._pinch = null;
       if (this._pointers.size === 0) this.viewport.style.cursor = 'grab';
       return;
     }
@@ -1088,8 +1077,6 @@ export class MapView {
     if (drag && drag.pointerId === event.pointerId) {
       this._drag = null;
       this.viewport.style.cursor = 'grab';
-      // 拖拽结束：补一次视图通知，让瓦片层从「平滑插值」切回「nearest 锐利」再画一帧
-      if (drag.moved) this._emit();
 
       // 拖拽超过阈值就不算点击（契约要求）
       if (!drag.moved && !this._isIgnoredTarget(event.target)) {
@@ -1105,11 +1092,9 @@ export class MapView {
   _onPointerCancel(event) {
     if (this._destroyed) return;
     this._pointers.delete(event.pointerId);
-    const wasInteracting = this._interacting();
     if (this._pinch && this._pointers.size < 2) this._pinch = null;
     if (this._drag && this._drag.pointerId === event.pointerId) this._drag = null;
     if (this._pointers.size === 0) this.viewport.style.cursor = 'grab';
-    if (wasInteracting && !this._interacting()) this._emit(); // 恢复锐利渲染
     this._reportPointerMove(null);
   }
 
