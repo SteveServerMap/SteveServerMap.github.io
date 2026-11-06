@@ -875,9 +875,12 @@ export class MapView {
    */
   viewportToImage(clientX, clientY) {
     const p = this._localPoint(Number(clientX), Number(clientY));
+    // 与 #stage 实际渲染状态一致：_applyTransform 写 DOM 时把 tx/ty/scale 舍入到 4 位小数，
+    // 这里用同一份舍入值反解，点击命中与屏幕上真实显示的图片逐像素对齐。
+    const { tx, ty, scale } = this._renderState();
     return {
-      px: (p.x - this.tx) / this.scale,
-      py: (p.y - this.ty) / this.scale,
+      px: (p.x - tx) / scale,
+      py: (p.y - ty) / scale,
     };
   }
 
@@ -890,10 +893,19 @@ export class MapView {
    * @returns {{x:number, y:number}}
    */
   imageToViewport(px, py) {
+    // 必须用「实际渲染」的舍入状态（n4）：标记层不在 #stage 变换内，
+    // 若用未舍入的 tx/scale，标记与屏幕上真实渲染的图片之间会有
+    // 图片像素 × 舍入误差（最大 ~2px）的系统偏差。
+    const { tx, ty, scale } = this._renderState();
     return {
-      x: this.tx + Number(px) * this.scale,
-      y: this.ty + Number(py) * this.scale,
+      x: tx + Number(px) * scale,
+      y: ty + Number(py) * scale,
     };
+  }
+
+  /** #stage 实际渲染用的状态：tx/ty/scale 舍入到 4 位小数（与 _applyTransform 完全一致） */
+  _renderState() {
+    return { tx: n4(this.tx), ty: n4(this.ty), scale: n4(this.scale) };
   }
 
   /**

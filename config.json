@@ -135,7 +135,7 @@
           "x": 942,
           "z": -916,
           "group": "default",
-          "icon": "pin"
+          "icon": "shop"
         },
         {
           "id": "wp-11",
@@ -159,7 +159,7 @@
           "x": 728,
           "z": -184,
           "group": "group",
-          "icon": "pin"
+          "icon": "diamond"
         },
         {
           "id": "wp-14",
@@ -167,7 +167,7 @@
           "x": 782,
           "z": -143,
           "group": "default",
-          "icon": "pin"
+          "icon": "shop"
         },
         {
           "id": "wp-15",

@@ -162,6 +162,11 @@ function IMAGE_INFO() {
         }
       : null,
     stageTransform: stage ? getComputedStyle(stage).transform : null,
+    calibration: (() => {
+      const cal = window.__mapApp && window.__mapApp.state && window.__mapApp.state.calibration;
+      if (!cal) return null;
+      return { xMin: cal.xMin, xMax: cal.xMax, zMin: cal.zMin, zMax: cal.zMax, flipZ: !!cal.flipZ };
+    })(),
   };
 }
 
@@ -375,7 +380,9 @@ function dimensionById(id) {
 }
 
 function expectedScreenPoint(dimension, imageInfo, x, z) {
-  const cal = dimension.calibration;
+  // 瓦片维度 config.calibration 只是说明性字段（世界范围以 manifest 为准），
+  // 期望值必须用页面实际生效的投影（瓦片 = manifest / 单图 = calibration）。
+  const cal = (imageInfo && imageInfo.calibration) || dimension.calibration;
   const flipZ = Boolean(cal.flipZ);
   let px = ((x - cal.xMin) / (cal.xMax - cal.xMin)) * imageInfo.naturalWidth;
   let py = ((z - cal.zMin) / (cal.zMax - cal.zMin)) * imageInfo.naturalHeight;
@@ -1333,7 +1340,7 @@ async function main() {
   });
 
   /* ---------------- 4. 位置正确性（初始 / 缩放 / 拖拽） ---------------- */
-  await checkIfReady('pos.initial', '标记位置与 config.calibration 换算结果一致（误差 < 1.5px）', async () => {
+  await checkIfReady('pos.initial', '标记位置与实际投影换算结果一致（瓦片=manifest / 单图=calibration，误差 < 1.5px）', async () => {
     await resetView();
     const dimension = dimensionById('overworld');
     const result = await measurePositions(dimension);
@@ -1838,6 +1845,9 @@ async function main() {
             `applyCalibration 后标记几乎没移动（${targetName} 位移 ${markerMove.toFixed(1)}px，期望 > 5px），校准可能未生效`,
           );
         }
+        // 校准改了投影但不改视图：瓦片世界宽（47104 方块）下整图缩放很小，
+        // 复用主世界图片的测试维度会缩成视口一角，重拟合后才谈得上「标记在视口内可校验」。
+        await resetView();
         positionReport = await measurePositions({ ...imageDim, calibration: changed });
         assertPositions(positionReport, { minChecked: 3, phase: '应用新画幅后' });
       } finally {
@@ -2258,6 +2268,16 @@ async function main() {
           hash: location.hash,
           naturalWidth: image ? (isCanvas ? Number(image.dataset.imageWidth || 0) : image.naturalWidth) : 0,
           naturalHeight: image ? (isCanvas ? Number(image.dataset.imageHeight || 0) : image.naturalHeight) : 0,
+          calibration:
+            api && api.state && api.state.calibration
+              ? {
+                  xMin: api.state.calibration.xMin,
+                  xMax: api.state.calibration.xMax,
+                  zMin: api.state.calibration.zMin,
+                  zMax: api.state.calibration.zMax,
+                  flipZ: !!api.state.calibration.flipZ,
+                }
+              : null,
           viewState: viewState
             ? {
                 scale: viewState.scale,
@@ -2279,7 +2299,7 @@ async function main() {
       const centerPx = (vs.viewWidth / 2 - vs.tx) / vs.scale;
       const centerPy = (vs.viewHeight / 2 - vs.ty) / vs.scale;
       secondCenter = imagePointToWorld(
-        dimension.calibration,
+        secondState.calibration || dimension.calibration,
         secondState.naturalWidth,
         secondState.naturalHeight,
         centerPx,

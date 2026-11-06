@@ -320,12 +320,12 @@ export class MarkerLayer {
       const y = point ? point.y : 0;
 
       const prev = this._pos.get(id);
+      // 缓存必须等于「上次实际写入 DOM」的值：跳过写入时不能更新缓存，
+      // 否则动画尾段每帧位移 < 0.25px 时缓存会悄悄漂移，
+      // 末帧与漂移后缓存的差值仍 < 0.25，最终位置永远写不进去。
       if (!prev || Math.abs(prev.x - x) > 0.25 || Math.abs(prev.y - y) > 0.25) {
         marker.style.transform = `translate3d(${x}px, ${y}px, 0)`;
         this._pos.set(id, { x, y });
-      } else if (prev) {
-        prev.x = x;
-        prev.y = y;
       }
 
       const offscreen = !point || x < 0 || y < 0 || x > vw || y > vh;

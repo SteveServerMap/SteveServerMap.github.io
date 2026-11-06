@@ -15,15 +15,24 @@
   - `viewer.js`：`_applyImageSize` 跳过瓦片 canvas（其 CSS 盒由 TileLayer 按视口接管）；
   - `docs/CONTRACT.md` §10.2/§10.3 改为视口渲染语义（位图=视口×dpr、层级选择公式不变、只画视口、像素上限语义变化）；
   - `tests/smoke.mjs`：`IMAGE_INFO` 的 rect 改读 `#stage`（瓦片 canvas 盒现在是视口大小）；`tiles.render`
-    不透明像素阈值随 `stats.drawn` 缩放；`tiles.levels` 改为断言「位图恒为视口 × dpr，不随层级放大」。
-- 回归：站点单测 **69/69**、`static-checks.mjs` **30/30**；`smoke.mjs` 渲染相关项全部通过（`tiles.render` /
-  `tiles.levels` / `dim.switch` / 全程无 console error），并且 `tiles.levels` 从旧代码的失败变为通过。
-- 已知数据耦合（非代码问题）：`smoke.mjs` 有 6 项失败（`pos.initial` / `pos.zoom` / `pos.drag` /
-  `cal.crop-change` / `sidebar.click` / `deep-link`）。原因是 2026-11-06 13:34 主世界瓦片重新生成后，
-  `tiles/overworld/manifest.json` 的 `worldBlockRange` 扩为 X[-39424, 7680] Z[-6656, 3584]，
-  而 `config.json` 的 overworld `calibration` 仍是旧值（X±2048 / Z[-3584, 1536]）；这 6 项用 config.calibration
-  手算期望位置，与应用实际使用的 manifest 投影系统性偏移。已用「旧代码 + 同一份数据」基线复跑确认同样失败
-  （基线 28 通过 / 7 失败，其中 6 项与视口版完全一致）。同步 `config.json` 校准值后即可恢复全绿。
+    不透明像素阈值随 `stats.drawn` 缩放；`tiles.levels` 改为断言「位图恒为视口 × dpr，不随层级放大」；
+    期望位置改用**页面实时投影**（瓦片 = manifest / 单图 = calibration，`IMAGE_INFO.calibration` 携带
+    `state.calibration`）；`cal.crop-change` 应用校准后先 `resetView()` 重拟合视图。
+- 过程中定位并修复的两个真实渲染 bug（各有独立机制，都会造成「标记与图片差 ~1.7px」）：
+  1. **标记缓存漂移**（`markers.js`）：`update()` 跳过 DOM 写入时仍把 `_pos` 缓存更新成未写入的值。
+     视图动画尾段每帧位移 < 0.25px 阈值，缓存一路漂移；末帧相对漂移后缓存的差值仍 < 0.25px，
+     最终位置永远写不进去——标记冻结在动画倒数第二帧的位置（实测差 1.66px 且 1.4s 内不收敛）。
+     修复：缓存只记录「上次实际写入 DOM」的值，跳过写入时不更新缓存（累计偏差越过阈值后自然补写）。
+  2. **渲染状态舍入不一致**（`viewer.js`）：`_applyTransform` 写 `#stage` transform 时用 `n4()` 把
+     tx/ty/scale 舍入到 4 位小数，而 `imageToViewport` / `viewportToImage` 用未舍入的内部状态。
+     标记层不在 `#stage` 变换内，于是标记与屏幕上真实渲染的图片之间产生
+     「图片像素坐标 × 舍入误差」的系统偏差（fit 视图 39430px 处 = 1.65px）。
+     修复：两个换算函数与 DOM 共用同一份 n4 舍入状态（`_renderState()`），
+     标记 / 点击命中与渲染图片逐像素对齐（实测偏差 0.004px）。
+- 回归：站点单测 **69/69**、`static-checks.mjs` **30/30**、`smoke.mjs` **36/36**（含 `tiles.render` /
+  `tiles.levels` / `dim.switch` / `pos.*` / 全程无 console error；`tiles.levels` 从旧代码的失败变为通过）。
+- 已知数据缺口（非代码问题）：`tiles/overworld/tiles/6/1_0.png` 磁盘缺失但 manifest 声称存在
+  （2026-11-06 14:10 瓦片重生成的数据缺口），配置工具 e2e `c2-page` 因 404 失败，需重新生成该瓦片或修 manifest。
 
 ## 下界与末地切换为瓦片底图（2026-11-06）
 
