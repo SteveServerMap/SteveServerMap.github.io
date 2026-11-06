@@ -17,15 +17,21 @@
  *   - 每个层级自带 originBlockX/Z（该层级 (0,0) 瓦片左上角的世界坐标），
  *     正常情况下等于 worldBlockRange 的左上角，代码按差值做偏移，不假设两者相等。
  *
- * 渲染策略（视口渲染）：
- *   - canvas 的 CSS 盒 = 当前视口在「图片像素」空间里的矩形（left/top = -tx/scale，
- *     width/height = viewWidth/scale），由 #stage 的 transform 映射回屏幕视口，
- *     因此位图与屏幕 1:1 —— 位图多大、瓦片画多大就多大，绝不整图降采样；
- *   - canvas 的**位图**尺寸 = 视口尺寸 × dpr（超出 MAX_CANVAS_PIXELS 时才等比降），
+ * 渲染策略（窗口渲染 + 平移冻结）：
+ *   - canvas 的 CSS 盒 = 「光栅化窗口」在图片像素空间里的矩形（left/top = 窗口左上角，
+ *     width/height = 窗口跨度），由 #stage 的 transform 映射回屏幕视口；
+ *     窗口 = 视口每边外扩 25%，位图 = 窗口 × scale × dpr = 1.5×视口 × dpr；
+ *   - canvas 的**位图**尺寸 = 窗口 × scale × dpr（超出 MAX_CANVAS_PIXELS 时才等比降），
  *     与层级 / 世界尺寸无关；宿主必须给 canvas 绝对定位（position: absolute）；
- *   - 每帧先清屏，再按当前层级贴「视口覆盖到的瓦片」，瓦片按
+ *   - 每次光栅化先清屏，再按当前层级贴「窗口覆盖到的瓦片」，瓦片按
  *     tileSize × blocksPerPixel × scale × dpr 的目标尺寸绘制（可放大可缩小），
  *     避免半透明像素反复叠加，也避免层级切换后留下旧栅格内容；
+ *   - **平移冻结**：视口仍在窗口内且 scale / viewWidth / viewHeight / dpr 未变时，
+ *     位图与 CSS 盒冻结不动，画面移动完全由 #stage 的 transform 平移完成 ——
+ *     浏览器合成器直接搬动已栅格化的 canvas 纹理，无重采样、亚像素连续且保持
+ *     nearest 锐利（逐帧重栅格化会让 nearest 把瓦片栅格重锚到整数位图像素，
+ *     画面按 1px 台阶移动，拖起来会抖）；视口滑出窗口（或缩放 / 尺寸 / dpr 变化 /
+ *     新瓦片解码完成）才重画一次；静止与拖拽同一条路径，进出交互零重画零变化；
  *   - 放大（1 瓦片像素 ≥ 1 canvas 像素）时关掉 imageSmoothingEnabled，保持像素锐利；
  *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），一律静默跳过；
  *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求；
@@ -35,6 +41,9 @@
 
 /** 已解码瓦片的内存上限（张）。256×256 RGBA 约 256 KB/张，400 张 ≈ 100 MB。 */
 export const MAX_CACHED_TILES = 400;
+
+/** 光栅化窗口的外扩比例：窗口 = 视口每边外扩 25%（窗口面积 = 视口的 2.25 倍） */
+const WINDOW_OVERSCAN = 0.5;
 
 /** 「缺失瓦片」负缓存的条目上限（只是一个 URL 集合，几乎不占内存） */
 export const MAX_MISSING_TILES = 4096;
@@ -367,6 +376,7 @@ export class TileLayer {
     this._active = false;
     this._level = null;      // 当前层级对象
     this._factor = 1;        // canvas 像素 / 视口像素（位图超上限时 < 1）
+    this._window = null;     // 冻结窗口：位图当前覆盖的图片像素矩形 + 冻结时视图指纹
     this._viewState = null;
     this._raf = 0;
     this._destroyed = false;
@@ -398,7 +408,10 @@ export class TileLayer {
     const sameSource = this.tileset && this.tileset.baseUrl === tileset.baseUrl;
     this.tileset = tileset;
     if (!sameSource) this.reset({ keepCache: false });
-    else this._level = null; // 尺寸可能一致，但强制重算一次层级
+    else {
+      this._level = null;
+      this._window = null; // 尺寸可能一致，但强制重算层级与窗口（新 manifest 不能沿用旧冻结窗口）
+    }
   }
 
   /** 激活 / 停用（切到单张图片底图的维度时停用，避免继续请求瓦片） */
@@ -409,6 +422,7 @@ export class TileLayer {
     if (!next) {
       this._cancelFrame();
       this._clearCanvas();
+      this._window = null;
     } else if (this._viewState) {
       this.draw();
     }
@@ -443,6 +457,7 @@ export class TileLayer {
     this._cancelFrame();
     this._clearCanvas();
     this._level = null;
+    this._window = null;
     this._drawn = 0;
     this._visibleTiles = 0;
     if (!keepCache) {
@@ -515,29 +530,55 @@ export class TileLayer {
     if (!(scale > 0) || !isNum(tx) || !isNum(ty)) return;
     if (!(viewWidth > 0) || !(viewHeight > 0)) return;
 
+    const x0 = -tx / scale;             // 视口左缘 / 上缘（图片像素）
+    const y0 = -ty / scale;
+    const viewW = viewWidth / scale;    // 视口宽高（图片像素）
+    const viewH = viewHeight / scale;
+
+    // 平移冻结：视口仍在窗口内且缩放 / 视口尺寸 / dpr 未变时，位图与 CSS 盒都不动，
+    // 画面移动完全由 #stage 的 transform 平移完成（纯合成、无重采样、亚像素连续）。
+    // 静止与拖拽同一条路径 —— 进出交互不换窗口，也就没有那两次重画造成的画面微跳。
+    const frozen = this._window;
+    if (frozen && frozen.scale === scale
+        && frozen.viewWidth === viewWidth && frozen.viewHeight === viewHeight
+        && frozen.dpr === this._dpr
+        && x0 >= frozen.x0 && y0 >= frozen.y0
+        && x0 + viewW <= frozen.x1 && y0 + viewH <= frozen.y1) {
+      return;
+    }
+
     const tileset = this.tileset;
     const dpr = this._dpr;
     const level = tileset.levelForScale(scale, dpr);
     if (!level) return;
     this._level = level;
-    this._resizeBacking(viewWidth, viewHeight);
+
+    // 光栅化窗口 = 视口每边外扩 25%：视口在窗口内滑动时零重画（滑出窗口才重画一次）
+    const padX = (viewW * WINDOW_OVERSCAN) / 2;
+    const padY = (viewH * WINDOW_OVERSCAN) / 2;
+    const win = {
+      x0: x0 - padX, y0: y0 - padY,
+      x1: x0 + viewW + padX, y1: y0 + viewH + padY,
+      scale, viewWidth, viewHeight, dpr,
+    };
+    this._window = win;
+
+    // 位图 = 窗口 × scale × dpr = 1.5×视口 × dpr（与层级无关）
+    this._resizeBacking((win.x1 - win.x0) * scale, (win.y1 - win.y0) * scale);
 
     const bpp = level.blocksPerPixel;
     const factor = this._factor;
     const canvas = this.canvas;
     const ctx = this.ctx;
     const tileSize = tileset.tileSize;
-
-    // 视口渲染：CSS 盒 = 视口在图片像素空间里的矩形（#stage 的 transform 会把它
-    // 映射回屏幕视口），位图 = 视口 × dpr，所以 canvas 像素与屏幕设备像素 1:1。
-    const x0 = -tx / scale;
-    const y0 = -ty / scale;
     const kk = scale * dpr * factor; // canvas 像素 / 图片像素
+
+    // CSS 盒 = 窗口矩形，#stage 的 transform 把它映射回屏幕视口
     if (canvas.style) {
-      canvas.style.left = `${roundPx(x0)}px`;
-      canvas.style.top = `${roundPx(y0)}px`;
-      canvas.style.width = `${roundPx(viewWidth / scale)}px`;
-      canvas.style.height = `${roundPx(viewHeight / scale)}px`;
+      canvas.style.left = `${roundPx(win.x0)}px`;
+      canvas.style.top = `${roundPx(win.y0)}px`;
+      canvas.style.width = `${roundPx(win.x1 - win.x0)}px`;
+      canvas.style.height = `${roundPx(win.y1 - win.y0)}px`;
     }
 
     // 1 个瓦片像素占多少 canvas 像素：>=1 说明在放大 → 关掉插值保持锐利
@@ -549,11 +590,11 @@ export class TileLayer {
       canvas.style.imageRendering = canvasPxPerTilePx >= 1 ? 'pixelated' : 'auto';
     }
 
-    // 视口与地图的交集（钳制到地图范围，和瓦片裁剪一致）
-    const clampX0 = Math.max(x0, 0);
-    const clampY0 = Math.max(y0, 0);
-    const clampX1 = Math.min(x0 + viewWidth / scale, tileset.imageWidth);
-    const clampY1 = Math.min(y0 + viewHeight / scale, tileset.imageHeight);
+    // 窗口与地图的交集（钳制到地图范围，和瓦片裁剪一致）
+    const clampX0 = Math.max(win.x0, 0);
+    const clampY0 = Math.max(win.y0, 0);
+    const clampX1 = Math.min(win.x1, tileset.imageWidth);
+    const clampY1 = Math.min(win.y1, tileset.imageHeight);
 
     this._drawn = 0;
     if (!(clampX1 > clampX0) || !(clampY1 > clampY0)) {
@@ -582,8 +623,8 @@ export class TileLayer {
         visible += 1;
         const img = this._loadTile(level, col, row);
         if (!img) continue;
-        const dx = ((originOffsetX + col * tileSize) * bpp - x0) * kk;
-        const dy = ((originOffsetZ + row * tileSize) * bpp - y0) * kk;
+        const dx = ((originOffsetX + col * tileSize) * bpp - win.x0) * kk;
+        const dy = ((originOffsetZ + row * tileSize) * bpp - win.y0) * kk;
         const dsize = tileSize * bpp * kk;
         try {
           ctx.drawImage(img, dx, dy, dsize, dsize);
@@ -597,12 +638,12 @@ export class TileLayer {
     this._draws += 1;
   }
 
-  /** 按视口尺寸调整 canvas 位图：视口 × dpr，超出像素上限时等比降低 */
-  _resizeBacking(viewWidth, viewHeight) {
+  /** 按窗口尺寸调整 canvas 位图：窗口 × scale × dpr，超出像素上限时等比降低 */
+  _resizeBacking(windowCssWidth, windowCssHeight) {
     const canvas = this.canvas;
     if (!canvas) return;
-    const baseWidth = Math.ceil(viewWidth * this._dpr);
-    const baseHeight = Math.ceil(viewHeight * this._dpr);
+    const baseWidth = Math.ceil(windowCssWidth * this._dpr);
+    const baseHeight = Math.ceil(windowCssHeight * this._dpr);
     const pixels = baseWidth * baseHeight;
     this._factor = pixels > MAX_CANVAS_PIXELS ? Math.sqrt(MAX_CANVAS_PIXELS / pixels) : 1;
 
@@ -671,6 +712,7 @@ export class TileLayer {
       }
       this._loaded += 1;
       this._put(key, img);
+      this._window = null; // 新内容到达：下一帧必须重画（否则冻结判定会把新瓦片永远挡在门外）
       this._schedule();
     };
     // 404 / 解码失败都是正常情况（全透明瓦片不导出）：静默忽略，不再重试

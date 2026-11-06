@@ -135,6 +135,81 @@ test('repeated frames do not accumulate translucent tile alpha', (t) => {
   assert.equal(layer.stats.drawn, 0);
 });
 
+test('pans freeze the backing inside the always-overscan window', (t) => {
+  const { images } = installFakes(t);
+  const { canvas, ctx } = canvasFake();
+  const layer = new TileLayer(canvas, { tileset: tileset() });
+  t.after(() => layer.destroy());
+  layer.setActive(true);
+  const vs = { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 };
+  layer.update(vs);
+
+  // 静止即外扩窗口：盒 = 视口每边外扩 25%（32px），位图 = 1.5×视口
+  assert.equal(canvas.style.left, '-32px');
+  assert.equal(canvas.style.top, '-32px');
+  assert.equal(canvas.style.width, '192px');
+  assert.equal(canvas.width, 192);
+  assert.equal(canvas.height, 192);
+
+  // 瓦片解码完成强制一次重画（否则冻结判定会把新内容永远挡在门外）
+  images[0].onload();
+  layer.draw();
+  assert.equal(layer.stats.drawn, 1);
+  const settled = [canvas.width, canvas.height, ctx.clears, ctx.resizes, canvas.style.left, canvas.style.width];
+
+  // 窗口内平移（无需 interacting 信号）：完全冻结 —— 不清屏、不重设位图、盒不动，
+  // 画面移动交给 #stage 的 transform
+  layer.update({ ...vs, tx: 10 });
+  layer.update({ ...vs, tx: 31.7 });
+  layer.update({ ...vs, ty: 20 });
+  assert.deepEqual(
+    [canvas.width, canvas.height, ctx.clears, ctx.resizes, canvas.style.left, canvas.style.width],
+    settled,
+  );
+
+  // 视口滑出窗口左缘（x0 = -tx < -32）：重画一次，窗口重新居中，位图尺寸不变
+  layer.update({ ...vs, tx: 50 });
+  assert.equal(ctx.clears, settled[2] + 1);
+  assert.equal(canvas.style.left, '-82px');
+  assert.equal(canvas.width, settled[0], 'window size stays constant across reframe');
+
+  // 缩放变化（捏合 / 动画）：立即重画。窗口在图片像素空间变大（384px），
+  // 但位图 = 窗口 × scale 恒为 1.5×视口 = 192px，无需 resize —— 只多一次清屏重画
+  const beforeZoom = ctx.clears;
+  layer.update({ ...vs, tx: 50, scale: 0.5 });
+  assert.equal(ctx.clears, beforeZoom + 1);
+  assert.equal(canvas.width, settled[0], 'bitmap size is constant across scale');
+  assert.equal(canvas.style.width, '384px');
+
+  // 缩放恢复：重画（scale 变化），盒回到 192px
+  layer.update({ ...vs, tx: 50 });
+  assert.equal(canvas.style.width, '192px');
+
+  // 进出交互都不换窗口：interacting 翻转不引起任何重画（静止与拖拽同一路径）
+  const beforeEnd = ctx.clears;
+  layer.update({ ...vs, tx: 50, interacting: true });
+  layer.update({ ...vs, tx: 50, interacting: false });
+  assert.equal(ctx.clears, beforeEnd);
+  assert.equal(canvas.style.width, '192px');
+});
+
+test('freeze works without the interacting flag (config tool shares this path)', (t) => {
+  const { images } = installFakes(t);
+  const { canvas, ctx } = canvasFake();
+  const layer = new TileLayer(canvas, { tileset: tileset() });
+  t.after(() => layer.destroy());
+  layer.setActive(true);
+  const vs = { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 };
+  layer.update(vs);
+  images[0].onload();
+  layer.draw();
+  const settled = [ctx.clears, ctx.resizes, canvas.style.left, canvas.width, layer.stats.drawn];
+  // 无 interacting 字段的视图状态（配置工具不传）：窗口内平移同样冻结
+  layer.update({ ...vs, tx: 10 });
+  layer.update({ ...vs, tx: 20 });
+  assert.deepEqual([ctx.clears, ctx.resizes, canvas.style.left, canvas.width, layer.stats.drawn], settled);
+});
+
 test('switching capped levels with identical backing dimensions clears stale tiles', (t) => {
   const { images } = installFakes(t);
   const { canvas, ctx } = canvasFake();

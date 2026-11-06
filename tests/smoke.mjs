@@ -120,9 +120,9 @@ const INIT_SCRIPT = `
 /**
  * 读取「当前底图元素」的几何信息。
  * 单张图片维度是 <img id="map-image">，瓦片维度是 <canvas id="map-canvas">：
- * 底图几何一律读 #stage 的显示矩形 —— 瓦片渲染是视口渲染，<canvas> 的 CSS 盒只盖住
- * 当前视口，只有 #stage 才是「整幅地图」在屏幕上的盒子，rect/natural 换算对两边都成立
- * （canvas 的逻辑尺寸写在 data-image-width/height 上，因为它的 width 属性是视口位图尺寸）。
+ * 底图几何一律读 #stage 的显示矩形 —— 瓦片渲染是外扩窗口渲染，<canvas> 的 CSS 盒盖住
+ * 视口外扩一圈的区域，只有 #stage 才是「整幅地图」在屏幕上的盒子，rect/natural 换算对两边都成立
+ * （canvas 的逻辑尺寸写在 data-image-width/height 上，因为它的 width 属性是窗口位图尺寸）。
  */
 function IMAGE_INFO() {
   const img = document.querySelector('#map-image');
@@ -1458,7 +1458,7 @@ async function main() {
       const tiles = window.__mapApp.tiles ? window.__mapApp.tiles() : null;
       if (!canvas || !tiles) return { ok: false, reason: '找不到 #map-canvas 或 TileLayer（该维度没走瓦片？）' };
       const ctx = canvas.getContext('2d');
-      // 视口渲染下位图 = 视口大小，扫全图统计不透明像素；「画出来了」用绝对下限判定：
+      // 位图 = 1.5×视口×dpr（恒外扩窗口），扫全图统计不透明像素；「画出来了」用绝对下限判定：
       // 每张已绘制的瓦片至少贡献一点内容（整图视图下瓦片缩得很小，128 像素/张是宽松下界）。
       let opaque = 0;
       let sampled = 0;
@@ -1624,16 +1624,16 @@ async function main() {
         `层级没有随缩放单调变化：放大 ${near.level} / 中间 ${mid.level} / 整图 ${far.level}`,
       );
     }
-    // 视口渲染：位图 = 视口 × dpr，与层级无关（三档缩放应当一样大）
+    // 恒外扩窗口：位图 = 1.5×视口 × dpr，与层级无关（三档缩放应当一样大）
     if (!(near.canvasWidth === far.canvasWidth && far.canvasWidth === mid.canvasWidth)) {
       problems.push(
-        `视口渲染下位图尺寸不应随层级变化：放大 ${near.canvasWidth} / 中间 ${mid.canvasWidth} / 整图 ${far.canvasWidth}`,
+        `恒外扩窗口下位图尺寸不应随层级变化：放大 ${near.canvasWidth} / 中间 ${mid.canvasWidth} / 整图 ${far.canvasWidth}`,
       );
     }
-    const expectedBacking = Math.ceil(far.viewWidth * far.dpr);
+    const expectedBacking = Math.ceil(far.viewWidth * far.dpr * 1.5);
     if (Math.abs(far.canvasWidth - expectedBacking) > 1) {
       problems.push(
-        `位图宽度 ${far.canvasWidth} 与视口宽度 ×dpr 不符（视口 ${far.viewWidth}px、dpr ${far.dpr}，期望 ≈${expectedBacking}）`,
+        `位图宽度 ${far.canvasWidth} 与 1.5×视口宽度 ×dpr 不符（视口 ${far.viewWidth}px、dpr ${far.dpr}，期望 ≈${expectedBacking}）`,
       );
     }
     const totalTiles = tileset.levels[0].cols * tileset.levels[0].rows;
@@ -1652,7 +1652,7 @@ async function main() {
     if (problems.length) throw new Error(problems.slice(0, 5).join('；'));
 
     return (
-      `整图 level ${far.level}（视口位图 ${far.canvasWidth}px / ${far.visibleTiles} 张）→ 放大 level ${near.level}` +
+      `整图 level ${far.level}（位图 ${far.canvasWidth}px / ${far.visibleTiles} 张）→ 放大 level ${near.level}` +
       `（${near.visibleTiles} 张，全层 ${totalTiles} 张）` +
       `→ 缩回 level ${mid.level}（位图仍 ${mid.canvasWidth}px）`
     );
