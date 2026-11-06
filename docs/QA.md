@@ -29,10 +29,25 @@
      「图片像素坐标 × 舍入误差」的系统偏差（fit 视图 39430px 处 = 1.65px）。
      修复：两个换算函数与 DOM 共用同一份 n4 舍入状态（`_renderState()`），
      标记 / 点击命中与渲染图片逐像素对齐（实测偏差 0.004px）。
-- 回归：站点单测 **69/69**、`static-checks.mjs` **30/30**、`smoke.mjs` **36/36**（含 `tiles.render` /
+- 回归：站点单测 **74/74**、`static-checks.mjs` **30/30**、`smoke.mjs` **39/39**（含 `tiles.render` /
   `tiles.levels` / `dim.switch` / `pos.*` / 全程无 console error；`tiles.levels` 从旧代码的失败变为通过）。
 - 已知数据缺口（非代码问题）：`tiles/overworld/tiles/6/1_0.png` 磁盘缺失但 manifest 声称存在
   （2026-11-06 14:10 瓦片重生成的数据缺口），配置工具 e2e `c2-page` 因 404 失败，需重新生成该瓦片或修 manifest。
+
+## 拖动抖动：交互中平滑、静止时锐利（2026-11-06）
+
+- 现象：视口渲染上线后拖动地图画面抖动。实测排除性能因素（16.7ms 零掉帧、每帧绘制 0.02ms），
+  截图互相关对照证实旧画面以**整数 1px 台阶**移动（位移恒为整数、残差 0），速度在 3/4px 间脉动。
+- 根因：放大时 `imageSmoothingEnabled = false`（nearest）让 `drawImage` 把瓦片栅格逐帧重锚到整数 canvas 像素，
+  屏幕画面位置 = `round(tx + const)`。`tx` 与标记（0.25px 阈值）连续移动，画面却按 1px 台阶走，
+  每帧速度忽快忽慢（60Hz 下感知为抖动）；放大倍率越高（像素块越大）越明显。
+- 修复（标准像素渲染技法：交互中平滑、静止锐利）：
+  - `viewer.js`：`getViewState()` 新增 `interacting`（拖拽 / 捏合 / 动画中为 true）；
+    拖拽结束（`drag.moved`）、捏合松指、pointercancel 各补一次视图通知，让瓦片层切回 nearest 再画一帧锐利画面。
+  - `tiles.js`：`draw()` 采样改为 `interacting ? 双线性 : （放大 ? nearest : 双线性）`，
+    交互中画面以亚像素精度连续移动（实测位移 19.48~19.93 亚像素、残差 0.46~1.25 柔化），静止后恢复锐利。
+- 回归：站点单测 **74/74**（新增 5 条：tiles 采样切换 1 + viewer interacting 生命周期 4）、
+  `static-checks.mjs` **30/30**、`smoke.mjs` **39/39**。
 
 ## 下界与末地切换为瓦片底图（2026-11-06）
 
@@ -93,8 +108,9 @@
   调试接口 `window.__mapApp.addMeasurePoint()` 自动进入测距模式，旧脚本/测试不受影响。
 - 现象 2（设计问题）：只要有测量点，点「退出」面板仍可见、看起来「没反应」。
   修复（上一轮已改、本轮回归）：退出 = 收起面板，测量线/点保留；再点「测距」恢复编辑。
-- 回归：`tests/measure-guards.mjs` 3 项全过（点击不误加点 + 不进入测距点击路径、退出收面板且点保留、再开恢复）；
-  `tests/smoke.mjs` 的 `measure.*` 五项保持通过。
+- 回归：3 项浏览器级守卫已并入 `tests/smoke.mjs`（`measure.guard-inactive` / `measure.guard-exit` /
+  `measure.guard-reopen`，随 smoke 自动跑，独立脚本 measure-guards.mjs 已删除）；
+  `measure.*` 其余五项保持通过。
 
 ## 瓦片底图（2026-11-06）
 
@@ -322,6 +338,8 @@ node --test tests/coords.test.mjs
 | `pos.zoom` | `Input.dispatchMouseEvent` 滚轮（落点必须命中 `#map-image`）后 `view.getViewState().scale` 增大 ≥ 1.15 倍，图片矩形同步放大；标记偏差仍 < 1.5px，且每个标记位移与图片位移之差 < 1.5px |
 | `pos.drag` | CDP 拖拽平移后图片位移 > 10px，标记偏差仍 < 1.5px，位移与图片同步 |
 | `view.reset` | 「整图」按钮恢复视图 |
+| `tiles.render` | `#map-canvas` 可见且 `#map-image` 隐藏、逻辑尺寸 = manifest 跨度、投影范围 = `worldBlockRange`、画布真有像素、`drawImage` 次数 > 0、缓存不超上限 |
+| `tiles.levels` | 整图 level 3 → 放大到 1:1 变 level 0 → 缩回 level 2，层级与 canvas 位图随缩放单调变化 |
 | `data.config` | 列表项 id/名称/顺序与 `config.json` 逐条一致；分组行数量、id、名称与 config 一致 |
 | `cal.crop-change` | 用 `window.__mapApp.applyCalibration()` 应用「画幅放大 1.5 倍 + 平移」的新 calibration：已知标记确实移动（> 5px），且 10 个标记与**新画幅手算**坐标偏差 < 1.5px（证明「画幅变了、重新校准后路径点自动对回」），随后恢复原画幅 |
 | `sidebar.search` | 搜索「农场」列表项 10 → 2，清空后恢复 10；有结果时 `#waypoint-empty` 隐藏 |
@@ -330,13 +348,22 @@ node --test tests/coords.test.mjs
 | `group.toggle` | 分组眼睛按钮隐藏后该组可见标记 2 → 0，再点恢复 2 |
 | `ui.toggles` | 网格：点一次 `aria-pressed=true` 且 `.map-grid` `opacity=1`，再点回 `false`/0（一次点击只切换一次，验证无重复绑定）；标签：连点三次 `body[data-labels]` 依次 hover → always → never → hover；全隐：可见标记 0 且 `#waypoint-count=0/10`，全显恢复 10/10 |
 | `deep-link` | `focusWaypoint('castle')` 后 `location.hash` 同步出 `dim/x/z/s`（x/z 与 castle 相差 < 5 方块）；用该 hash 打开**新标签页**：`body[data-dimension]` 正确、视图中心世界坐标与 hash 相差 < 5 方块、无 console error |
-| `cal.open` | `#btn-calibrate` 打开 `#calibrator`，面板尺寸 > 0 |
-| `cal.manual` | 「直接输入画幅」页签填入四个边界值后，`#cal-json` 是可 `JSON.parse` 的对象，四个字段与输入一致（±0.5） |
-| `cal.close` | 取消关闭后 `#calibrator` 隐藏，且向导期间无新增 console error |
-| `cal.persist` | 应用校准后 `#footer-status` 显示「本地校准」；`localStorage['steveservermap.calibration.v1']` 写入且数值正确；刷新页面后仍生效且标记位置正确；点击 `#footer-status` 清除成功、localStorage 同步删除 |
-| `cal.pick` | 两点拾取端到端：进入拾取模式后 `.is-picking`（`#calibrator` + `#viewport`）与 `#cal-pick-hint` 正常，弹窗中心 `elementFromPoint` 不再命中面板（遮罩让路）；地图点击必须命中 `#map-image`；`#cal-a-px`/`#cal-b-px` 的像素与「图片显示矩形」手算一致（±1.5px）；拾取后退出拾取模式、焦点落到 `#cal-a-x`/`#cal-b-x`；填入手算世界坐标后 `#cal-json` 解出的画幅与原 calibration 相差 < 2 方块；`#cal-apply` 应用后 `state.calibration` 更新、标记与**新画幅手算**偏差 < 1.5px |
+| `measure.two` | 测距两点距离与总长正确（(0,0)→(300,400) = 500 格） |
+| `measure.polyline` | 多段折线每段独立标注、合计正确（100+240=340） |
+| `measure.interact` | 点地图可加点并吸附路径点、可撤销、Esc 退出测距 |
+| `measure.shift-detail` | 测距中 Shift+点路径点打开详情卡且不新增测量点 |
+| `measure.panel` | 测距读数面板上的点击/滚轮不穿透到地图（撤销/清空不误加点） |
+| `measure.guard-inactive` | 测距未开启时点地图不误加点、不进入测距点击路径（`window.__measureLastClick` 保持 null） |
+| `measure.guard-exit` | 点「退出」后读数面板收起、测量点保留 |
+| `measure.guard-reopen` | 再点「测距」面板恢复且测量点还在 |
+| `markers.dense` | 密集路径点合成 ×N 徽标、标签互相避让、连点可轮换选中 |
+| `convert.directions` | 换算面板双向换算正确，定位到画幅内坐标有效 |
+| `convert.real-click` | 换算面板方向按钮真实鼠标点击可切换（viewer 指针捕获回归） |
+| `convert.prefill` | 下界维度打开面板自动切 ×8 并预填下界坐标 |
+| `convert.oob` | 定位到画幅外坐标时提示且不移动视野 |
 | `narrow.layout` | `Emulation.setDeviceMetricsOverride(390×844)` 下：`#viewport` 宽 ≈ `window.innerWidth`（±1）、`document.scrollingElement.scrollWidth ≤ innerWidth+1`（无横向溢出）；抽屉打开时（fixed 覆盖层）地图宽度同样 == innerWidth；收起后布局恢复 |
 | `narrow.transition` | 桌面收起侧栏后把窗口缩到 390px，`#viewport` 不被压成 0（回归：曾被桌面端多列 grid 规则泄漏到移动断点压成 0px） |
+| `theme.toggle` | 主题真实点击切换、localStorage 持久化、系统偏好跟随 |
 | `run.console` | 全流程无 console error / 未捕获异常 / 未处理 Promise 拒绝 |
 | `artifacts.screenshot` | 全部通过后恢复桌面视口并保存 `ok-desktop.png`（> 1KB） |
 
@@ -353,6 +380,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
+| 2026-11-06 14:10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 74 通过 / 0 失败（`node --test tests/*.test.mjs`）；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.4 s）** |
 | 2026-11-05 02:05（Asia/Shanghai） | Node v24.18.0 / Windows x64 / Edge 155.0.4283.62 / 视口 1440×900 | **smoke 28 通过 / 0 失败 / 0 跳过 / 0 警告，22.4 s（本地服务）** |
 | 同一轮 | 线上 GitHub Pages `https://steveservermap.github.io/index.html` | **smoke 28 通过 / 0 失败，26.7 s**（`--url=` 外部服务模式） |
 | 同一轮 | — | **static-checks 30 通过 / 0 失败，19 ms** |

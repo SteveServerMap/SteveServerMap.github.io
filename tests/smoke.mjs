@@ -2595,6 +2595,103 @@ async function main() {
     return '面板点击/滚轮不穿透 · 撤销与清空生效 · 地图点击正常';
   });
 
+  await checkIfReady('measure.guard-inactive', '测距未开启：点地图不误加点、不进入测距点击路径', async () => {
+    await ensureSidebarOpen();
+    const before = await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.setMeasureActive(false);
+      window.__measureLastClick = null;
+      return {
+        points: window.__mapApp.measureSummary().points.length,
+        active: window.__mapApp.state.measureActive,
+      };
+    });
+    const viewport = await page.evalFn(() => {
+      const rect = document.getElementById('viewport').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    });
+    const spot = await findSafeMapPoint(viewport);
+    if (!spot) throw new Error('找不到安全地图落点');
+    await page.click(spot.x, spot.y);
+    await page.settle(300);
+    const after = await page.evalFn(() => ({
+      points: window.__mapApp.measureSummary().points.length,
+      active: window.__mapApp.state.measureActive,
+      lastClick: Boolean(window.__measureLastClick),
+    }));
+    if (after.points !== 0 || after.active !== false || after.lastClick !== false) {
+      throw new Error(`未开测距点地图不应加点/进入测距路径：点击前 ${before.points} 点 → ${JSON.stringify(after)}`);
+    }
+    return `点击前 ${before.points} 点 → 点击后 ${after.points} 点（进入测距点击=${after.lastClick}）`;
+  });
+
+  await checkIfReady('measure.guard-exit', '测距退出：面板收起、测量点保留', async () => {
+    await ensureSidebarOpen();
+    const viewport = await page.evalFn(() => {
+      const rect = document.getElementById('viewport').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    });
+    await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.setMeasureActive(true);
+    });
+    const spots = [];
+    for (const fractions of [[[0.42, 0.38]], [[0.58, 0.52]]]) {
+      const spot = await findSafeMapPoint(viewport, fractions);
+      if (!spot) throw new Error('找不到安全地图落点');
+      spots.push(spot);
+    }
+    await page.click(spots[0].x, spots[0].y);
+    await page.settle(260);
+    await page.click(spots[1].x, spots[1].y);
+    await page.settle(260);
+    const during = await page.evalFn(() => {
+      const panel = document.getElementById('measure-readout');
+      return {
+        points: window.__mapApp.measureSummary().points.length,
+        panelHidden: panel ? panel.hidden : null,
+      };
+    });
+    if (during.points < 2) throw new Error(`测距中应点出至少 2 个测量点，实际 ${during.points}`);
+    if (during.panelHidden !== false) throw new Error('测距中读数面板应显示');
+    await page.evalFn(() => window.__mapApp.setMeasureActive(false));
+    await page.settle(220);
+    const exited = await page.evalFn(() => {
+      const panel = document.getElementById('measure-readout');
+      return {
+        points: window.__mapApp.measureSummary().points.length,
+        panelHidden: panel ? panel.hidden : null,
+        active: window.__mapApp.state.measureActive,
+      };
+    });
+    if (exited.panelHidden !== true || exited.points !== during.points || exited.active !== false) {
+      throw new Error(`退出后应收面板且点保留：测量中 ${JSON.stringify(during)} → 退出后 ${JSON.stringify(exited)}`);
+    }
+    return `测量中 ${during.points} 点 → 退出后 ${exited.points} 点、面板隐藏`;
+  });
+
+  await checkIfReady('measure.guard-reopen', '测距重开：面板恢复且测量点还在', async () => {
+    await ensureSidebarOpen();
+    const before = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
+    if (before < 2) throw new Error(`前置检查失败：应残留至少 2 个测量点，实际 ${before}`);
+    await page.evalFn(() => window.__mapApp.setMeasureActive(true));
+    await page.settle(220);
+    const reopened = await page.evalFn(() => {
+      const panel = document.getElementById('measure-readout');
+      return {
+        points: window.__mapApp.measureSummary().points.length,
+        panelHidden: panel ? panel.hidden : null,
+      };
+    });
+    const ok = reopened.panelHidden === false && reopened.points === before;
+    await page.evalFn(() => {
+      window.__mapApp.clearMeasure();
+      window.__mapApp.setMeasureActive(false);
+    });
+    if (!ok) throw new Error(`重开测距应恢复面板且点还在：重开前 ${before} 点 → ${JSON.stringify(reopened)}`);
+    return `重开前 ${before} 点 → 面板显示、${reopened.points} 点`;
+  });
+
   await checkIfReady('markers.dense', '密集路径点：合成 ×N 徽标、标签互相避让、连点可轮换选中', async () => {
     const STACK_ID = 'dense-smoke';
     try {

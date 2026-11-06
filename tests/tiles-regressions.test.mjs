@@ -135,6 +135,27 @@ test('repeated frames do not accumulate translucent tile alpha', (t) => {
   assert.equal(layer.stats.drawn, 0);
 });
 
+test('interacting switches tile sampling to bilinear, at rest stays nearest', (t) => {
+  installFakes(t);
+  const { canvas, ctx } = canvasFake();
+  const layer = new TileLayer(canvas, { tileset: tileset() });
+  t.after(() => layer.destroy());
+  layer.setActive(true);
+  // 1 瓦片像素 = 1 canvas 像素（放大）：静止时 nearest 保持像素锐利
+  const vs = { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 };
+  layer.update(vs);
+  assert.equal(ctx.imageSmoothingEnabled, false);
+  assert.equal(canvas.style.imageRendering, 'pixelated');
+  // 拖拽 / 动画等交互中：双线性让画面亚像素连续移动（nearest 会逐帧重锚成 1px 台阶）
+  layer.update({ ...vs, interacting: true });
+  assert.equal(ctx.imageSmoothingEnabled, true);
+  assert.equal(canvas.style.imageRendering, 'auto');
+  // 缩小（1 瓦片像素 < 1 canvas 像素）：任何状态都平滑（防摩尔纹）
+  layer.update({ ...vs, scale: 0.5 });
+  assert.equal(ctx.imageSmoothingEnabled, true);
+  assert.equal(canvas.style.imageRendering, 'auto');
+});
+
 test('switching capped levels with identical backing dimensions clears stale tiles', (t) => {
   const { images } = installFakes(t);
   const { canvas, ctx } = canvasFake();
