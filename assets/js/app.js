@@ -17,6 +17,7 @@ import { MeasureLayer, formatDistance } from './measure.js';
 import { Sidebar } from './sidebar.js';
 import { TileLayer, loadTileset, formatGeneratedAt } from './tiles.js';
 import { ConverterPanel } from './converter.js';
+import { SkinPanel } from './skin.js';
 
 /* ============================== 小工具 ============================== */
 
@@ -76,6 +77,7 @@ let hashTimer = null;
 let tileLayer = null;
 /** @type {ConverterPanel|null} 主世界 ↔ 下界坐标换算面板 */
 let converter = null;
+let skinPanel = null;
 
 
 /* ============================== 启动 ============================== */
@@ -105,6 +107,7 @@ async function bootstrap() {
     initMarkers();
     initMeasure();
     initConverter();
+    initSkinPanel();
     initTheme();
 
     const hash = readHash();
@@ -126,7 +129,7 @@ async function bootstrap() {
     bindGlobalKeys();
     state.ready = true;
     document.body.dataset.ready = '1';
-    updateFooterStatus();
+    updateTilesTime();
     if (state.configWarnings && state.configWarnings.length) {
       console.warn('[app] 配置存在警告，详见上方。');
     }
@@ -148,7 +151,6 @@ function initChrome() {
   document.title = site.title;
   setText('site-title', site.title);
   setText('site-subtitle', site.subtitle);
-  setText('site-footer', site.footer);
   const meta = document.querySelector('meta[name="description"]');
   if (meta) meta.setAttribute('content', `${site.title} · ${site.subtitle}`);
 }
@@ -202,8 +204,8 @@ function initViewer() {
     armHashSync();
     tryCall(view, 'zoomBy', 1 / 1.35);
   });
-  bindClick('zoom-fit', () => fitToContent());
-  bindClick('btn-fit', () => fitToContent());
+  bindClick('zoom-fit', () => fitToSpawn());
+  bindClick('btn-fit', () => fitToSpawn());
   // 左下角「原点」：回到世界原点 + 恢复默认视野比例（与进入页面时一致）
   bindClick('btn-reset', () => {
     if (!focusOrigin({ animate: true })) gotoWorld(0, 0, { animate: true });
@@ -321,7 +323,6 @@ function initSidebar() {
 
   tryCall(sidebar, 'setSiteInfo', state.config.site);
   tryCall(sidebar, 'setDimensions', state.config.dimensions, state.config.defaultDimension);
-  tryCall(sidebar, 'setCalibrationNotice', false);
 }
 
 function handleAction(name) {
@@ -398,12 +399,9 @@ async function applyDimension(dimensionId, opts = {}) {
   state.tileset = null;
   state.activeWaypointId = null;
   document.body.dataset.dimension = dim.id;
-  setText('footer-dim', dim.name);
   tryCall(sidebar, 'setDimensions', state.config.dimensions, dim.id);
   tryCall(sidebar, 'setActiveWaypoint', null);
   tryCall(sidebar, 'setLoading', true);
-  tryCall(sidebar, 'setCalibrationNotice', false);
-  document.body.dataset.calibrated = '0';
   tryCall(markers, 'setData', [], [], null);
 
   // 在任何 await / 缺图返回之前清掉旧维度的状态与加载任务。
@@ -479,7 +477,6 @@ async function applyDimension(dimensionId, opts = {}) {
       projection: null,
       dimension: dim,
     });
-    tryCall(sidebar, 'setCalibrationNotice', false);
     tryCall(markers, 'setData', [], [], null);
     updateStats();
     showMapState({
@@ -492,7 +489,7 @@ async function applyDimension(dimensionId, opts = {}) {
         ? `确认 ${dim.tiles.manifest} 与同目录的 tiles/<level>/<x>_<y>.png 都已发布到站点。`
         : '把导出的地图图片按这个文件名放到站点根目录即可；路径点会按世界坐标自动落位。',
     });
-    updateFooterStatus();
+    updateTilesTime();
     return;
   }
 
@@ -520,8 +517,7 @@ async function applyDimension(dimensionId, opts = {}) {
   refreshMarkers();
   hideMapState();
   tryCall(sidebar, 'setLoading', false);
-  updateCalibrationNotice();
-  updateFooterStatus();
+  updateTilesTime();
   drawGrid(safeViewState());
   scheduleHashSync();
 }
@@ -727,6 +723,9 @@ function initConverter() {
       // 下界视图 → ×8；主世界视图 → ÷8；其他维度不预填（换算只在主世界/下界间有意义）
       const direction = dimId === 'nether' ? 'n2ow' : 'ow2n';
       const prefillable = dimId === 'overworld' || dimId === 'nether';
+      if (next && skinPanel && skinPanel.isOpen()) {
+        skinPanel.setOpen(false); // 两面板同处右下角，互斥显示（onOpenChange 会复位 btn-skin）
+      }
       converter.setOpen(next, next ? {
         prefill: prefillable ? worldAtViewCenter() || undefined : undefined,
         direction,
@@ -740,6 +739,40 @@ function initConverter() {
             : '换算：主世界 ÷8 ↔ 下界 ×8（当前维度不参与换算，未预填）',
           'info', 3200,
         );
+      }
+    });
+  }
+}
+
+/* ============================== 玩家皮肤预览 ============================== */
+
+function initSkinPanel() {
+  const panelEl = $('skin-panel');
+  if (!panelEl) return;
+  skinPanel = new SkinPanel(panelEl, {
+    onOpenChange: (open) => {
+      const btn = $('btn-skin');
+      if (!btn) return;
+      btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+      btn.classList.toggle('is-active', open);
+    },
+  });
+  const btn = $('btn-skin');
+  if (btn) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const next = !skinPanel.isOpen();
+      if (next && converter && converter.isOpen()) {
+        converter.setOpen(false); // 两面板同处右下角，互斥显示
+        const cbtn = $('btn-convert');
+        if (cbtn) {
+          cbtn.setAttribute('aria-pressed', 'false');
+          cbtn.classList.remove('is-active');
+        }
+      }
+      skinPanel.setOpen(next);
+      if (next) {
+        toast('皮肤预览：输入正版 ID 查询（自动按 UUID 从皮肤源加载），或导入本地皮肤 PNG（64×64 / 128×128，旧版 64×32 / 128×64 也可）；拖拽旋转，右键平移，滚轮缩放，「回正」复位视角', 'info', 3600);
       }
     });
   }
@@ -977,12 +1010,58 @@ function fitToContent(opts = {}) {
 }
 
 /**
+ * 「整图」按钮：以出生点为中心、横向显示约 FIT_SPAN_BLOCKS 个方块的视野。
+ *
+ * 不做真正的整图适配：整图是最小缩放，1 像素只占 0.1~0.2 个屏幕像素，
+ * 整张地图缩成一幅模糊的缩略图。以出生点为中心放大，周边地形与常用路径点
+ * 一眼可辨；想要最小缩放可以一路滚轮缩小（minScaleFit 保证不会缩成一个点）。
+ */
+const FIT_SPAN_BLOCKS = 4500;
+
+/** 当前维度的出生点路径点（icon='spawn' 优先，其次 id 叫 spawn/wp），找不到就回退世界原点 */
+function findSpawnWaypoint() {
+  const dim = state.dimension;
+  const list = dim && Array.isArray(dim.waypoints) ? dim.waypoints : [];
+  return (
+    list.find((wp) => wp && wp.icon === 'spawn') ||
+    list.find((wp) => wp && /^(spawn|wp)$/i.test(String(wp.id || ''))) ||
+    null
+  );
+}
+
+function fitToSpawn(opts = {}) {
+  if (!state.projection || !state.imageSize) {
+    if (!focusOrigin(opts)) fitToContent(opts);
+    return;
+  }
+  const spawn = findSpawnWaypoint();
+  const pt = state.projection.worldToImage(
+    spawn && Number.isFinite(spawn.x) ? spawn.x : 0,
+    spawn && Number.isFinite(spawn.z) ? spawn.z : 0,
+  );
+  if (!pt || !Number.isFinite(pt.px)) {
+    fitToContent(opts);
+    return;
+  }
+  if (opts.arm !== false) armHashSync();
+  const blocksPerPixelX = (state.calibration ? state.calibration.xMax - state.calibration.xMin : state.imageSize.width) / state.imageSize.width;
+  const viewState = safeViewState();
+  const viewWidth = Number(viewState?.viewWidth) || 0;
+  let scale = null;
+  if (viewWidth > 0 && blocksPerPixelX > 0) {
+    scale = (viewWidth * blocksPerPixelX) / FIT_SPAN_BLOCKS;
+  }
+  tryCall(view, 'centerOnImagePoint', pt.px, pt.py, { scale, animate: opts.animate !== false });
+  drawGrid(safeViewState());
+}
+
+/**
  * 进入页面 / 点「原点」时的默认视野：以世界原点 (0,0) 为中心，横向约显示 DEFAULT_SPAN_BLOCKS 个方块。
  *
  * 为什么不直接整图适配：整图适配是「最小缩放」，1 像素只占 0.1~0.2 个屏幕像素，
  * 进来只看到一整片模糊的地图缩略图，既看不清地形也找不到自己在哪。
  * 换成「约 1024 方块视野」后大约 1 屏幕像素 = 1 方块（Minecraft 地图的原生比例），
- * 出生点周边地形和附近的路径点都能一眼看到。想总览全图仍可点「整图」。
+ * 出生点周边地形和附近的路径点都能一眼看到。
  */
 const DEFAULT_SPAN_BLOCKS = 1024;
 const MIN_SPAN_BLOCKS = 64;
@@ -1062,35 +1141,6 @@ function resolveCalibration(dim, imageSize) {
   });
 }
 
-function applyCalibration(calibration) {
-  const size = state.imageSize;
-  if (!size || !calibration) return;
-  // 瓦片维度：世界范围由 manifest 的 worldBlockRange 决定，改 calibration 只会让瓦片与路径点错位
-  if (state.tileset) {
-    console.warn('[app] 当前维度使用瓦片底图，世界范围由 manifest 决定，applyCalibration 已忽略');
-    toast('瓦片底图的世界范围来自 manifest，无需校准');
-    return;
-  }
-  const proj = buildProjection(calibration, size);
-  if (!proj) {
-    toast('校准参数无效，请检查四个边界值');
-    return;
-  }
-  state.calibration = { ...calibration, calibrated: true };
-  state.projection = proj;
-  tryCall(view, 'setProjection', proj);
-  refreshMarkers();
-  updateCalibrationNotice();
-  updateFooterStatus();
-  drawGrid(safeViewState());
-}
-
-function updateCalibrationNotice() {
-  const show = !state.calibration || state.calibration.calibrated !== true;
-  tryCall(sidebar, 'setCalibrationNotice', show);
-  document.body.dataset.calibrated = show ? '0' : '1';
-}
-
 /* ============================== 标签 / 网格 / 分享 ============================== */
 
 const LABEL_CYCLE = ['hover', 'always', 'never'];
@@ -1164,31 +1214,37 @@ function drawGrid(vs) {
     const p = toScreen(x, cal.zMin);
     if (p.x < -2 || p.x > w + 2) continue;
     const isAxis = Math.abs(x) < 0.0001;
+    ctx.lineWidth = 1;
     ctx.strokeStyle = isAxis ? 'rgba(90,210,111,.55)' : 'rgba(180,210,190,.13)';
     ctx.beginPath();
     ctx.moveTo(Math.round(p.x) + 0.5, 0);
     ctx.lineTo(Math.round(p.x) + 0.5, h);
     ctx.stroke();
-    if (!isAxis) {
-      ctx.fillStyle = 'rgba(200,220,205,.5)';
-      ctx.fillText(String(x), Math.round(p.x) + 3, 4);
-    }
+    if (!isAxis) drawGridLabel(String(x), Math.round(p.x) + 3, 4);
   }
 
   for (let z = startZ; z <= cal.zMax; z += step) {
     const p = toScreen(cal.xMin, z);
     if (p.y < -2 || p.y > h + 2) continue;
     const isAxis = Math.abs(z) < 0.0001;
+    ctx.lineWidth = 1;
     ctx.strokeStyle = isAxis ? 'rgba(90,210,111,.55)' : 'rgba(180,210,190,.13)';
     ctx.beginPath();
     ctx.moveTo(0, Math.round(p.y) + 0.5);
     ctx.lineTo(w, Math.round(p.y) + 0.5);
     ctx.stroke();
-    if (!isAxis) {
-      ctx.fillStyle = 'rgba(200,220,205,.5)';
-      ctx.fillText(String(z), 4, Math.round(p.y) + 2);
-    }
+    if (!isAxis) drawGridLabel(String(z), 4, Math.round(p.y) + 2);
   }
+}
+
+function drawGridLabel(text, x, y) {
+  if (!gridCtx) return;
+  gridCtx.lineJoin = 'round';
+  gridCtx.lineWidth = 3.5;
+  gridCtx.strokeStyle = 'rgba(6,10,7,.85)';
+  gridCtx.fillStyle = 'rgba(218,236,224,.92)';
+  gridCtx.strokeText(text, x, y);
+  gridCtx.fillText(text, x, y);
 }
 
 function updateScaleBar(vs) {
@@ -1372,11 +1428,10 @@ function showFatalConfigError(error) {
   });
   const list = $('waypoint-list');
   if (list) list.innerHTML = '';
-  setText('footer-dim', '配置读取失败');
 }
 
-function updateFooterStatus() {
-  const el = $('footer-status');
+function updateTilesTime() {
+  const el = $('tiles-time');
   if (!el) return;
   const text =
     state.tileset && state.tileset.generatedAt
@@ -1533,7 +1588,6 @@ window.__mapApp = {
     return state.projection;
   },
   applyDimension,
-  applyCalibration,
   resolveCalibration,
   focusWaypoint,
   toggleGrid,
@@ -1545,6 +1599,9 @@ window.__mapApp = {
   },
   get converter() {
     return converter;
+  },
+  get skin() {
+    return skinPanel;
   },
   worldAtViewCenter,
   measureSummary: () => (measure ? measure.summary : null),

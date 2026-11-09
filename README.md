@@ -29,7 +29,7 @@ Minecraft 服务器的**离线地图站点**：一张导出的地图 PNG（或�
 | --- | --- |
 | ![桌面端](docs/screenshots/desktop-main.png) | ![手机端](docs/screenshots/mobile-main.png) |
 
-> 截图来自真实浏览器（Edge headless），基底图为仓库内的 `主世界.png`，路径点是 `config.json` 里的示例数据。
+> 截图来自真实浏览器（Edge headless + 本地静态服务器），基底图为仓库内的瓦片 `tiles/`，路径点是 `config.json` 里的真实数据。
 
 ---
 
@@ -205,7 +205,7 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `calibrated` | boolean | 是否已经确认校准过。`false` 时侧栏会显示「当前维度画幅尚未校准」的提示 |
+| `calibrated` | boolean | 是否已经确认校准过（历史字段，站点 UI 不再显示提示） |
 | `xMin` | number | **图片左边缘**对应的世界 X |
 | `xMax` | number | **图片右边缘**对应的世界 X |
 | `zMin` | number | **图片上边缘**对应的世界 Z |
@@ -283,7 +283,7 @@ py = (z - zMin) / (zMax - zMin) * H        // 开了南北翻转 flipZ 时取 1 
 
 行为说明：
 
-- 世界范围 = `worldBlockRange`，所以配了 `tiles` 的维度**不需要 `calibration`**（写了也只当备注，`window.__mapApp.applyCalibration` 对它无效）。
+- 世界范围 = `worldBlockRange`，所以配了 `tiles` 的维度**不需要 `calibration`**（写了也只当备注，站点不会用它换算）。
 - 层级选择：让「1 瓦片像素 ≈ 1 屏幕像素」，即 `blocksPerPixel × 当前缩放` 最接近 1 的那一层。
 - 放大时关掉插值（`imageSmoothingEnabled = false` + `image-rendering: pixelated`），保持像素锐利。
 - 已解码瓦片走 LRU 缓存，上限 400 张（约 100 MB）；canvas 位图另有 2400 万像素的硬上限，超过时按比例降低位图分辨率，避免超大导出把内存撑爆。
@@ -584,7 +584,7 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 那一片在导出时就是空的（未探索 / 没有地图数据），不是加载失败。可以对比 `manifest.json` 里各层级的 `minX/maxX/minZ/maxZ` 确认覆盖范围。
 
 **Q：路径点整体偏移 / 全部跑到一起了。**
-先看侧栏是否有「当前维度画幅尚未校准」的提示 —— `calibrated: false` 或者 `calibration` 四个边界还是默认值，就会整体偏。按 [第 6 节](#6-画幅变了重新校准) 用两个地标校准一次即可。如果校准后仍然偏：检查两个地标的坐标是否填错（最容易发生）、两点是否离得太近；如果地图图片被非等比拉伸过，X/Z 比例会不一致，向导会给出提示。
+`calibration` 四个边界还是默认值（`calibrated: false`），就会整体偏。按 [第 6 节](#6-画幅变了重新校准) 用两个地标校准一次即可。如果校准后仍然偏：检查两个地标的坐标是否填错（最容易发生）、两点是否离得太近；如果地图图片被非等比拉伸过，X/Z 比例会不一致，向导会给出提示。
 
 **Q：南北颠倒（上下反了）。**
 图片上方是 `+Z` 时，把 `calibration.flipZ` 设为 `true`。用两点校准时向导会自动判断；手动输入时勾「南北翻转（图片上方是 +Z）」。
@@ -599,7 +599,7 @@ https://你的站点/#dim=overworld&x=120&z=-340&s=0.75&wp=spawn
 ① 浏览器缓存 → `Ctrl + F5`；② JSON 语法错误 → 按 `F12` 看 Console，页面会直接提示「config.json 不是合法的 JSON」；最常见原因是**结尾多余的逗号**、**中文引号 `“”`**、**注释**（JSON 不支持注释）。建议用支持 JSON Schema 的编辑器打开。
 
 **Q：校准后只有我这台电脑是对的，别人打开还是歪的。**
-「应用并刷新」只写进当前浏览器的 localStorage。要把校准结果固化，必须点「复制 JSON 片段」→ 粘进 `config.json` 的 `calibration` → 保存并部署。页脚出现「本地校准生效（仅本浏览器）· 点击清除」时，说明你现在看到的是本地覆盖，点它即可清除。
+站点没有本地校准功能：画幅只来自 `config.json`，所有浏览器看到的位置都一致。要把校准结果固化，必须在 SteveServerMapConfig 配置工具里校准后保存并部署 `config.json`（工具里的「复制 JSON 片段」→ 粘进 `config.json` 的 `calibration` → 保存并部署）。
 
 **Q：瓦片维度还需要校准吗？**
 不需要。瓦片自带世界范围（`manifest.json` 的 `worldBlockRange`），路径点按它换算；`config.json` 里该维度的 `calibration` 只作说明。只有用单张 `image` 的维度才需要校准。

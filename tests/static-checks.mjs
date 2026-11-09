@@ -441,7 +441,6 @@ async function main() {
     'assets/js/coords.js': [
       'createProjection',
       'normalizeCalibration',
-      'calibrationFromTwoPoints',
       'boundsFromScale',
       'formatCoords',
       'fmtBlock',
@@ -520,11 +519,11 @@ async function main() {
     return 'OK';
   });
 
-  await rep.check('css.app-grid', '.app 使用 grid-template-rows: auto 1fr auto', async () => {
+  await rep.check('css.app-grid', '.app 使用 grid-template-rows: auto 1fr（无页脚）', async () => {
     const block = /\.app\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     ok(block.length > 0, '找不到 .app 规则块');
     ok(/display\s*:\s*grid/.test(block), '.app 没有 display: grid');
-    ok(/grid-template-rows\s*:\s*auto\s+1fr\s+auto/.test(block), '.app 的 grid-template-rows 不是 auto 1fr auto');
+    ok(/grid-template-rows\s*:\s*auto\s+1fr\s*;/.test(block), '.app 的 grid-template-rows 不是 auto 1fr（页脚已移除）');
     return 'OK';
   });
 

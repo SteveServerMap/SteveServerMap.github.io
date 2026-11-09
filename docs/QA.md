@@ -2,6 +2,134 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 手动校准残留移除（2026-11-10）
+
+画幅校准早已统一在 **SteveServerMapConfig** 配置工具里做（站内校准向导 2026-11-05 移除），
+本轮删掉站内仅存的「手动校准」痕迹：
+
+- `assets/js/app.js`：删 `applyCalibration()` 调试 API 与 `updateCalibrationNotice()`，
+  以及全部 `setCalibrationNotice` 调用与 `body[data-calibrated]` 标记；
+  `window.__mapApp` 不再暴露 `applyCalibration`（`resolveCalibration` 保留，单测仍用）。
+- `assets/js/sidebar.js` + `index.html` + `assets/css/style.css`：`#calibration-notice`
+  「未校准」横幅整链删除（节点、`setCalibrationNotice`、`.notice` 样式）。
+- `assets/js/coords.js`：删 `calibrationFromTwoPoints()`（站内已无调用方，属死代码）；
+  对应单测 4 项一并移除（79 → 75）。
+- `tests/smoke.mjs`：删 `cal.crop-change`（依赖 `applyCalibration` 调试 API；40 → 39 项）；
+  诊断快照不再收集 `#calibration-notice`。
+- `assets/js/config.js`：缺 calibration 的告警文案改为指向 SteveServerMapConfig 配置工具。
+- `tests/static-checks.mjs`：契约导出清单移除 `calibrationFromTwoPoints`。
+- **保留**：`calibration` 数据本身（下界/末地单图维度与瓦片回退仍靠它定位）、
+  `normalizeCalibration`/`boundsFromScale`/`createProjection`/`buildProjection`、
+  config.schema 的 `calibrated` 字段（历史数据字段，不再驱动 UI）。
+- 回归：单测 **75/75**、`static-checks.mjs` **30/30**、`smoke.mjs` **39 通过 / 0 失败 / 0 跳过**。
+
+## 玩家皮肤 3D 预览（2026-11-10）
+
+- 新增顶栏「皮肤」按钮 + 右下角 `#skin-panel`：输入正版 ID 查询，或导入本地皮肤 PNG；
+  canvas 3D 预览（拖拽旋转、**右键平移**、滚轮缩放），与换算面板互斥显示，Esc 关闭。
+- **默认静止不旋转**；面板内五个动作按钮「走路 / 奔跑 / 静止 / 旋转 / 回正」：
+  走路/奔跑/静止互斥切换 skinview3d 动画（Walking/Running/IdleAnimation），
+  「旋转」为开关（`autoRotate`，速度 1.2）；左键拖拽（旋转手势）后自动停转并复位按钮，
+  右键平移不打断旋转开关。「回正」先停旋转（与左键拖拽一致），再把**模型转回正面**
+  （`playerWrapper.rotation.y = 0`）并恢复**首次渲染成功时的相机位姿快照**
+  （position + controls.target）。
+  两个关键事实（均已核实 bundle 源码）：
+  1. **skinview3d 3.4.2 的 autoRotate 转的是模型（playerWrapper），不是相机**——
+     渲染循环里 `this.playerWrapper.rotation.y += dt * autoRotateSpeed`。若回正只复位相机，
+     模型会停在转出的角度上（用户反馈「回正后人物视图向右偏」的根因）。
+  2. 不用 `controls.reset()`：其 position0 是 OrbitControls 构造时的位姿，与 skinview3d
+     加载后摆好的默认视角不一致。
+- 3D 查看器 = **skinview3d 3.4.2**，自托管 `assets/vendor/skinview3d.bundle.js`（UMD 自包含 three.js +
+  skinview-utils，477KB，普通 `<script>` 先于 module 引入，挂全局 `window.skinview3d`）。
+  项目保持零 npm 依赖 / 无构建步骤，故不用其 ESM 分发包（libs/*.js 依赖 skinview-utils）。
+- `assets/js/skin.js`：纯函数（`normalizeSkinId` / `skinProfileUrl` / `skinUuidUrls` / `isSkinSize` /
+  `legacyPatchRects` / `LEGACY_PATCHES` / `padLegacySkin`）+ `SkinPanel`（懒创建 SkinViewer、竞态令牌、单源 8s 超时、FileReader 导入）。
+  **尺寸：64×64 / 128×128（HD）与旧版 64×32 / 128×64**，旧版自动补全为正方形：
+  `legacyPatchRects(w,h)` 把 64×32 布局按 s=w/64 等比缩放（以 skinview3d 3.4.2 `model.js` 的
+  UV 布局为准，每肢体 16×12 块内各面顺序均为 -x/front/+x/back），左臂/左腿基座 = 右臂/右腿
+  整块复制，无需逐面翻转；肢体第二层保持透明（旧版本就无肢体第二层，左右对称最忠实）。
+  **128×128 为原生渲染**：已核实 bundle 源码，`loadSkin` 接受任意正方形（或宽=高×2 的旧版），
+  UV 按 64 归一化，而 HD 布局正是 64 布局的等比 2× 放大，坐标天然吻合；slim 检测也按
+  `width/64` 缩放，故 128× 无需降采样。
+- `assets/js/viewer.js`：`.skin-panel` 加入 `IGNORE_SELECTOR`（否则 3D 拖拽被 setPointerCapture 吞掉，
+  同 `convert.real-click` 回归的由来）。`viewer.controls.enablePan = true` 打开右键平移
+  （skinview3d 默认关闭 pan，mouseButtons 默认 左键旋转 / 中键缩放 / 右键平移）。
+- **正版 ID 查询：名称先解析为 UUID，再按 UUID 取皮肤**。2026-11-10 实测定位「皮肤是错的」根因：
+  第三方皮肤源的**名称直查会命中旧名称缓存**——minotar 同名返回的是一张 64×32 村民皮
+  （旧持有者/旧缓存），而同一玩家的 UUID 返回 64×64 动漫皮；Mojang sessionserver 官方纹理
+  （2026-11-09 刚换肤，slim）与两者都不同，即**所有代理源都是滞后缓存**，且 Mojang 官方接口
+  （sessionserver / api.mojang.com / api.minecraftservices.com）不带 CORS，纯静态站无法直连。
+  最终链（均带 CORS）：
+  1. `playerdb.co/api/player/minecraft/{id}`（JSON）→ 名称→UUID（`raw_id`）+ 官方纹理直链
+     `skin_texture`（textures.minecraft.net，实测带 ACAO:*，http 会改写为 https 防混合内容）；
+  2. 皮肤按 UUID 依次回退：`mineatar`（`api.mineatar.io/skin/{uuid}.png`，实测 200 + ACAO:* +
+     `Cache-Control: max-age=86400, stale-while-revalidate=14400`，可达源中刷新最勤）
+     → `mc-heads`（缓存较勤，但本机被 Cloudflare 403 限流）→ `minotar`；
+  3. 兜底：playerdb 附带的官方纹理直链（时效同 playerdb 缓存，实测滞后约 6 天）。
+  **crafatar 被排除**：实测它以 HTTP 500 但有时 200 返回自己的错误占位图（一张风景图，
+  64×64 合法 PNG），会被当成皮肤贴到模型上（表现为「绿衫棕裤」的假人）。
+  `api.ashcon.app` 未入链：实测 429（Mojang 限流）且其 `textures.skin.url` 直链才最鲜，
+  恢复后可作为最鲜源。各源均为缓存代理，换肤后可能滞后一段时间；状态行会标注实际来源（如「来源 minotar」）。
+- 面板布局稳定性：状态行固定两行高度（line-clamp），查询中/结果文案长度变化时
+  面板高度不变（实测打开面板 / 查询中 / 查询完成三阶段均为 655.19px）；
+  五个动作按钮为分段式控件（凹槽 + 高亮药丸，`aria-pressed` 同步；「回正」为瞬时按钮无 active 态）。
+- 回归：
+  - `tests/skin.test.mjs` 8 项（ID 规范 / playerdb 档案地址 / UUID 多源列表与非法 UUID /
+    尺寸（64 / 128 两档）/ 补全矩形表边界与 128 档等比缩放 / 无 DOM 守卫）；
+  - `tests/smoke.mjs` 新增 `skin.panel`：真实点击开合与互斥、非法 ID 本地报错（离线安全，
+    不发网络请求）、DataTransfer 导入页内生成的 64×64 PNG、旧版 64×32 PNG（断言
+    「已补全为 64×64」）与 **128×128 HD PNG（断言状态行 128×128 且不走补全路径）**、
+    3D 查看器就绪（playerObject.skin.visible）、**默认静止**
+    （autoRotate=false + 静止按钮 active）、真实点击走路/奔跑/静止（动画实例更换 +
+    aria-pressed 迁移）、「旋转」开关真实点击开、左键真实拖拽停转复位且不穿透地图
+    （视野中心不动）、**右键真实拖拽平移相机（camera.position 变化）且地图视野不动**、
+    **「回正」真实点击（旋转开启时模型已转 ≥0.05 rad，点击后模型 yaw 归零 ±0.001 且
+    相机回到导入后初始位姿，误差 < 0.01）**、
+    Esc 关闭复位、全程无 console error；
+  - 全量：单测 **79/79**、`static-checks.mjs` **30/30**、`smoke.mjs` **40/40**（2026-11-10 UI 精简轮后）。
+    当轮曾为 38/1/1：唯一失败 `ui.toggles`（全隐前可见 29/31）随后被 UI 精简轮的「删除页脚」顺带修复
+    （见下方 UI 精简节：页脚 32px 占高导致钳制整图下 zMin 侧 6525 方块被裁、wp-24/wp-26 离屏；
+    删页脚后地图区 +33px，裁剪区缩到 4500 方块，两标记回到视口内，属真实通过而非放宽断言）。
+
+## UI 精简：左下角面板 / 「整图」 / 底栏 / 瓦片时间（2026-11-10，同日两轮）
+
+按用户要求，第一轮六项改动，同日第二轮追加三项（各条内以「第二轮」标注）：
+
+1. **左下角按钮上方的描述行去掉**：第一轮 `#dimension-meta` 删掉 `dim-meta-state` 已校准/未校准徽标
+   与 `dim-meta-bounds` 范围行，只保留当前维度名称一行；第二轮**维度名称行也去掉**——
+   `#dimension-meta` 整体删除（`sidebar.js _renderDimensionMeta` 及三处调用点全部移除），
+   `.sidebar-foot` 只保留按钮。
+2. **「已校准」提示去掉**：同上，徽标整体移除；同日第三轮又把 `#calibration-notice`
+   未校准横幅整体删除（见文件开头「手动校准残留移除」节）。
+3. **「整图」按钮改为以出生点居中、放大视野**（`app.js` 新增 `fitToSpawn()`）：
+   出生点 = 当前维度 `icon === 'spawn'` 的路径点（其次 id 叫 `spawn`/`wp`），找不到回退世界原点 (0,0)；
+   视野横向 ≈ `FIT_SPAN_BLOCKS` 方块（`viewWidth × blocksPerPixelX / span`，与 `focusOrigin` 同公式）。
+   `#btn-fit` 与 `#zoom-fit` 都改绑 `fitToSpawn`；真正的整图适配（最小缩放）仍可一路滚轮缩小到达。
+   第二轮 `FIT_SPAN_BLOCKS` 2048 → **1536**：视野更窄、缩放更大（约 ×1.33）。
+4. **底栏去掉**：`<footer class="app-footer">`（站点口号 / 维度名 / 瓦片时间）整体删除；
+   `style.css` 的 `.app-footer`/`.footer-*`/`--footer-h` 清掉，`.app` 网格改 `auto 1fr` 两行；
+   `app.js` 的 `setText('site-footer')`/`setText('footer-dim')` 与 `sidebar.js` 的
+   `siteFooter`/`footerDim` 节点、`setSiteInfo` 的 footer 分支一并删除（`config.site.footer` 字段仍被
+   config 校验容忍，只是不再显示）。
+5. **瓦片更新时间**：第一轮移到顶栏右侧（`.topbar-right` 末尾、主题按钮之后）；
+   第二轮**再移到侧栏底脚 `.sidebar-foot` 内、视图按钮上侧，无边框**——
+   纯文本（muted 11px 单行省略），flex 纵列 + `gap:8px` 自然排在 `.foot-actions` 上方，
+   ≤620px 窄屏隐藏规则移除。`updateFooterStatus()` 更名 `updateTilesTime()`，行为不变
+   （`state.tileset.generatedAt` 存在时显示 `formatGeneratedAt` 文案，否则隐藏）。
+6. **测试跟进**（`tests/smoke.mjs`）：
+   - `resetView()` 基建改为直接调 `window.__mapApp.fitToContent({ animate:false })`（全图适配 = 最小缩放，
+     其余检查需要「所有标记可见」的前置状态；与 `centerOnOrigin`/`applyDimension` 同类基建 API）；
+   - `view.reset` 重写为新语义断言：**真实鼠标点击** `#zoom-fit`（`page.clickSelector`），
+     断言视图中心距出生点 < 3 图片像素、缩放 ≥ 全图适配 × 1.2（1536 档实测约 ×30.7）。
+   - `pos.initial`/`tiles.levels` 等仍走 `resetView()` 基建，断言语义不变（far 档仍是最粗层级）。
+- 回归：单测 **79/79**、`static-checks.mjs` **30/30**、`smoke.mjs` **40 通过 / 0 失败 / 0 跳过**。
+  上轮的已知失败 `ui.toggles` 本轮转绿，根因与机制：
+  旧布局有 32px 页脚 → 地图区高 811px → 整图适配 rawFit ≈ 0.0149 被 `MIN_SCALE=0.02` 钳制 →
+  上下各裁 130px，zMin 侧 6525 方块内的标记 `is-offscreen`（`wp-24` z=-3889、`wp-26` z=-3933
+  距 zMin=-8704 仅 4815 方块）→ 全隐前可见 29/31。本轮删除页脚后地图区 +33px（844px），
+  裁剪区缩到 4500 方块，两标记回到视口内 → 31/31。属真实通过（未放宽断言）；
+  注意余量约 6px，若画幅再扩大可能复发，届时再议（渲染不动前提下不动 `MIN_SCALE`）。
+
 ## 瓦片底图改为视口渲染（2026-11-06）
 
 - 背景：主世界瓦片 level 0 栅格 47104×10240（约 4.8 亿像素）。旧渲染器把整幅地图画进一张 backing canvas，
@@ -154,8 +282,8 @@
   - （2026-11-06 补充）`Tileset.levelForScale(scale, dpr)` / `TileLayer({ dpr })` 支持设备像素比：
     站点默认仍传 1（行为不变），工具预览会传 `devicePixelRatio`，高分屏自动选更细层级；
     dpr 只参与层级选择与插值判定，**不乘进 canvas 位图尺寸**，内存上限不变。
-  - 瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（toast 提示后忽略），
-    因此 `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
+  - 瓦片维度的世界范围由 manifest 决定，与 `config.json` 里该维度的 `calibration` 无关
+    （后者只作说明；`applyCalibration` 调试 API 已于 2026-11-10 移除）。
   - 层级切换会重新分配 canvas 位图（level 0 ↔ level 3），连续跨层级缩放有少量重分配开销。
 
 ## 交互体检修正（2026-11-05）
@@ -355,11 +483,10 @@ node --test tests/coords.test.mjs
 | `pos.initial` | 每个可见标记的锚点与「config.calibration + 图片实际显示区域」手算坐标偏差 **< 1.5px** |
 | `pos.zoom` | `Input.dispatchMouseEvent` 滚轮（落点必须命中 `#map-image`）后 `view.getViewState().scale` 增大 ≥ 1.15 倍，图片矩形同步放大；标记偏差仍 < 1.5px，且每个标记位移与图片位移之差 < 1.5px |
 | `pos.drag` | CDP 拖拽平移后图片位移 > 10px，标记偏差仍 < 1.5px，位移与图片同步 |
-| `view.reset` | 「整图」按钮恢复视图 |
+| `view.reset` | 真实点击「整图」按钮：视图中心距出生点 < 3 图片像素（出生点 = `icon='spawn'` 路径点，找不到回退 (0,0)），且缩放 ≥ 全图适配 × 1.2（不显示整张地图） |
 | `tiles.render` | `#map-canvas` 可见且 `#map-image` 隐藏、逻辑尺寸 = manifest 跨度、投影范围 = `worldBlockRange`、画布真有像素、`drawImage` 次数 > 0、缓存不超上限 |
-| `tiles.levels` | 整图 level 3 → 放大到 1:1 变 level 0 → 缩回 level 2，层级与 canvas 位图随缩放单调变化 |
+| `tiles.levels` | 整图（最粗层级）→ 放大到 1:1 变 level 0 → 缩回中间层级，层级与 canvas 位图随缩放单调变化（当前 manifest 9 层：整图 level 6 → level 0 → level 2） |
 | `data.config` | 列表项 id/名称/顺序与 `config.json` 逐条一致；分组行数量、id、名称与 config 一致 |
-| `cal.crop-change` | 用 `window.__mapApp.applyCalibration()` 应用「画幅放大 1.5 倍 + 平移」的新 calibration：已知标记确实移动（> 5px），且 10 个标记与**新画幅手算**坐标偏差 < 1.5px（证明「画幅变了、重新校准后路径点自动对回」），随后恢复原画幅 |
 | `sidebar.search` | 搜索「农场」列表项 10 → 2，清空后恢复 10；有结果时 `#waypoint-empty` 隐藏 |
 | `sidebar.empty` | 搜索无结果时列表 0 项且 `#waypoint-empty` 可见 |
 | `sidebar.click` | 点击列表项后该标记锚点距视口中心 < 40px |
@@ -379,6 +506,7 @@ node --test tests/coords.test.mjs
 | `convert.real-click` | 换算面板方向按钮真实鼠标点击可切换（viewer 指针捕获回归） |
 | `convert.prefill` | 下界维度打开面板自动切 ×8 并预填下界坐标 |
 | `convert.oob` | 定位到画幅外坐标时提示且不移动视野 |
+| `skin.panel` | 皮肤预览：真实点击开合与互斥、非法 ID 本地报错（离线安全）、DataTransfer 导入 64×64 与旧版 64×32 PNG（自动补全）、3D 查看器就绪、默认静止、走路/奔跑/静止真实点击切换、旋转开关与左键拖拽停转复位、右键平移相机且不穿透地图、Esc 关闭复位、无 console error |
 | `narrow.layout` | `Emulation.setDeviceMetricsOverride(390×844)` 下：`#viewport` 宽 ≈ `window.innerWidth`（±1）、`document.scrollingElement.scrollWidth ≤ innerWidth+1`（无横向溢出）；抽屉打开时（fixed 覆盖层）地图宽度同样 == innerWidth；收起后布局恢复 |
 | `narrow.transition` | 桌面收起侧栏后把窗口缩到 390px，`#viewport` 不被压成 0（回归：曾被桌面端多列 grid 规则泄漏到移动断点压成 0px） |
 | `theme.toggle` | 主题真实点击切换、localStorage 持久化、系统偏好跟随 |
@@ -398,6 +526,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
+| 2026-11-10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 78 通过 / 0 失败（含 skin.test.mjs 7 项）；static-checks 30 通过 / 0 失败；smoke 38 通过 / 1 失败（36.2 s；新增 skin.panel 通过，唯一失败为已知数据耦合项 ui.toggles 29/31，见「玩家皮肤 3D 预览」章节）** |
 | 2026-11-07（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 71 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.5 s）；probe-freeze 探针通过（静止外扩窗口、拖动全程零重画、松手零变化、位移与鼠标一致、拖动锐利）** |
 | 2026-11-06 14:10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 69 通过 / 0 失败（`node --test tests/*.test.mjs`）；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.4 s）** |
 | 2026-11-05 02:05（Asia/Shanghai） | Node v24.18.0 / Windows x64 / Edge 155.0.4283.62 / 视口 1440×900 | **smoke 28 通过 / 0 失败 / 0 跳过 / 0 警告，22.4 s（本地服务）** |
@@ -443,14 +572,13 @@ node --test tests/coords.test.mjs
 
 ## 5. 已知限制
 
-1. **依赖调试接口**：`pos.zoom` 的 scale 断言、`cal.crop-change`、`cal.persist` 使用 `app.js` 暴露的
-   `window.__mapApp`（`view.getViewState()`、`state.calibration`、`applyCalibration`）。
-   若该接口被移除：`cal.crop-change` 会直接失败并提示；`pos.zoom` 会退化为仅用图片矩形宽度断言并给出警告。
+1. **依赖调试接口**：`pos.zoom` 的 scale 断言使用 `app.js` 暴露的
+   `window.__mapApp`（`view.getViewState()`、`state.calibration`）。
+   若该接口被移除：`pos.zoom` 会退化为仅用图片矩形宽度断言并给出警告。
 2. **只覆盖 Chromium**（Edge / Chrome）。Firefox / Safari 未验证；`Input.dispatchMouseEvent` 的滚轮/拖拽在别的浏览器内核上行为可能不同。
 3. **不做视觉像素比对**：截图仅作留证；布局断言全部基于几何数值（`getBoundingClientRect`、computed style）。
 4. **窄屏只做「尺寸 + 开合」验证**：`Emulation.setDeviceMetricsOverride` 不是真实触屏，双指捏合缩放、触摸滚动未覆盖。
-5. **校准向导两点拾取已覆盖（`cal.pick`）**：但拾取依赖 `elementFromPoint` 必须命中 `#map-image`，如果将来 UI 上的浮层（提示条、弹窗）盖住地图中心区域，该用例需要换一个落点。
-6. **搜索用例使用固定词「农场」**：依赖 `config.json` 示例数据。若示例路径点改名，需要同步更新 `sidebar.search` 的查询词（断言本身仍以 config 数据动态计算期望值）。
+5. **搜索用例使用固定词「农场」**：依赖 `config.json` 示例数据。若示例路径点改名，需要同步更新 `sidebar.search` 的查询词（断言本身仍以 config 数据动态计算期望值）。
 7. **未覆盖项**：分享按钮写剪贴板（`navigator.clipboard` 在无头环境需要权限）、键盘快捷键（`G` / `L` / 方向键）、`markers.js` 详情弹窗的排版细节。URL 深链、坐标网格、标签模式、全显/全隐已在 `deep-link` 与 `ui.toggles` 中覆盖。
 8. **无 CI 集成**：目前只能在本机运行；GitHub Actions 上需要安装 Edge/Chrome 并把 `--browser` 指向可执行文件。
 9. **同一时间只能跑一个 smoke**：`tests/artifacts/.run.lock` 用 pid 锁阻止并行运行（两个实例会共用 `tests/artifacts/`、互相清理截图/报告，并各起一份浏览器）。若上次异常退出留下锁，下次运行会检测到进程已不存在并自动接管。

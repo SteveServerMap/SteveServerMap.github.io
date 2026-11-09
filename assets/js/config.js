@@ -290,7 +290,7 @@ function normalizeCalibrationRaw(raw, warnings, dimName) {
     source: 'none', // bounds | scale | none
   };
   if (!isObject(raw)) {
-    warnings.push(`维度「${dimName}」没有 calibration，路径点将无法定位（可用左上角「校准」生成）`);
+    warnings.push(`维度「${dimName}」没有 calibration，路径点将无法定位（请用 SteveServerMapConfig 配置工具校准）`);
     return out;
   }
 

@@ -6,7 +6,6 @@
  * 覆盖范围（契约 §2）：
  *   - createProjection 正算 / 反算 / 往返 / flipZ / blocksPerPixel / 非法参数退化
  *   - normalizeCalibration 两种写法（四边画幅、缩放+原点）、缺字段、字符串数字、xMin 优先
- *   - calibrationFromTwoPoints 正常反解、flipZ 推断、退化情形返回 null、反解结果自洽
  *   - boundsFromScale
  *   - formatCoords / fmtBlock / distanceXZ
  */
@@ -17,7 +16,6 @@ import assert from 'node:assert/strict';
 import {
   createProjection,
   normalizeCalibration,
-  calibrationFromTwoPoints,
   boundsFromScale,
   formatCoords,
   fmtBlock,
@@ -309,89 +307,6 @@ test('normalizeCalibration：字符串数字也能解析（config.json 手写容
   assert.equal(cal.xMin, -100);
   assert.equal(cal.zMax, 50);
   assert.equal(cal.flipZ, false);
-});
-
-/* ========================================================================== */
-/* calibrationFromTwoPoints                                                    */
-/* ========================================================================== */
-
-test('calibrationFromTwoPoints：由两个已知地标反解画幅', () => {
-  const r = calibrationFromTwoPoints(
-    { px: 0, py: 0, x: -1000, z: -2000 },
-    { px: 1000, py: 2000, x: 0, z: 0 },
-    { imageWidth: 1000, imageHeight: 2000 },
-  );
-  assert.deepEqual(r, { xMin: -1000, xMax: 0, zMin: -2000, zMax: 0, flipZ: false });
-});
-
-test('calibrationFromTwoPoints：反解结果能精确复现原两点（自洽性）', () => {
-  // 假设真实画幅：2048×2048 像素覆盖 [-1024,1024]²
-  const truth = createProjection({
-    xMin: -1024, xMax: 1024, zMin: -1024, zMax: 1024,
-    imageWidth: 2048, imageHeight: 2048,
-  });
-
-  const aWorld = { x: 100, z: -50 };
-  const bWorld = { x: -300, z: 150 };
-  const aImg = truth.worldToImage(aWorld.x, aWorld.z);
-  const bImg = truth.worldToImage(bWorld.x, bWorld.z);
-
-  const solved = calibrationFromTwoPoints(
-    { px: aImg.px, py: aImg.py, ...aWorld },
-    { px: bImg.px, py: bImg.py, ...bWorld },
-    { imageWidth: 2048, imageHeight: 2048 },
-  );
-
-  assert.deepEqual(solved, { xMin: -1024, xMax: 1024, zMin: -1024, zMax: 1024, flipZ: false });
-
-  const re = createProjection({ ...solved, imageWidth: 2048, imageHeight: 2048 });
-  const backA = re.worldToImage(aWorld.x, aWorld.z);
-  closeTo(backA.px, aImg.px, 1e-9, 'A.px 复现');
-  closeTo(backA.py, aImg.py, 1e-9, 'A.py 复现');
-});
-
-test('calibrationFromTwoPoints：南北翻转的图能推断出 flipZ', () => {
-  // 图片上边缘（py=0）是世界 Z 最大值
-  const r = calibrationFromTwoPoints(
-    { px: 0, py: 0, x: 0, z: 0 },
-    { px: 1000, py: 1000, x: 1000, z: -1000 },
-    { imageWidth: 1000, imageHeight: 1000 },
-  );
-  assert.equal(r.flipZ, true);
-  assert.equal(r.xMin, 0);
-  assert.equal(r.xMax, 1000);
-  assert.equal(r.zMin, -1000);
-  assert.equal(r.zMax, 0);
-
-  // 带上 flipZ 建投影，两点都应精确落回原位
-  const p = createProjection({ ...r, imageWidth: 1000, imageHeight: 1000 });
-  assert.equal(p.isValid, true);
-  assert.deepEqual(p.worldToImage(0, 0), { px: 0, py: 0 });
-  assert.deepEqual(p.worldToImage(1000, -1000), { px: 1000, py: 1000 });
-});
-
-test('calibrationFromTwoPoints：退化情形返回 null', () => {
-  const opts = { imageWidth: 1000, imageHeight: 1000 };
-  const okA = { px: 0, py: 0, x: 0, z: 0 };
-
-  // 两点的 px 相同 → X 轴无法反解
-  assert.equal(calibrationFromTwoPoints(okA, { px: 0, py: 500, x: 100, z: 100 }, opts), null);
-  // 两点的 py 相同 → Z 轴无法反解
-  assert.equal(calibrationFromTwoPoints(okA, { px: 500, py: 0, x: 100, z: 100 }, opts), null);
-  // 世界 X 相同 → X 跨度 0
-  assert.equal(calibrationFromTwoPoints(okA, { px: 500, py: 500, x: 0, z: 100 }, opts), null);
-  // 世界 Z 相同 → Z 跨度 0
-  assert.equal(calibrationFromTwoPoints(okA, { px: 500, py: 500, x: 100, z: 0 }, opts), null);
-  // 两点完全重合
-  assert.equal(calibrationFromTwoPoints(okA, { ...okA }, opts), null);
-  // 点左右填反（世界 X 递减）→ X 反向，无法满足 xMax > xMin
-  assert.equal(calibrationFromTwoPoints(okA, { px: 1000, py: 1000, x: -1000, z: 1000 }, opts), null);
-  // 坐标非数值
-  assert.equal(calibrationFromTwoPoints(okA, { px: 'a', py: 1000, x: 1000, z: 1000 }, opts), null);
-  // 图片尺寸缺失
-  assert.equal(calibrationFromTwoPoints(okA, { px: 1000, py: 1000, x: 1000, z: 1000 }, {}), null);
-  // 入参缺失
-  assert.equal(calibrationFromTwoPoints(null, null, opts), null);
 });
 
 /* ========================================================================== */

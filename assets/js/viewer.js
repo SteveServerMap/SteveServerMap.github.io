@@ -32,6 +32,7 @@ const IGNORE_SELECTOR = [
   '.marker-popup',
   '.zoom-panel',
   '.convert-panel',
+  '.skin-panel',
   '.coord-readout',
   '.map-hint',
   '.scale-bar',

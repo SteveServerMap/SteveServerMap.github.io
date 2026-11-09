@@ -234,96 +234,12 @@ export function normalizeCalibration(raw, { imageWidth, imageHeight } = {}) {
     };
   }
 
-  // 两种写法都不完整 → 视为「未校准」，交给调用方提示
+  // 两种写法都不完整 → 视为「未校准」
   return null;
 }
 
 /* -------------------------------------------------------------------------- */
-/* 3. 两点反解画幅（校准向导的核心）                                            */
-/* -------------------------------------------------------------------------- */
-
-/**
- * 由「两个已知地标」反解画幅。
- *
- * 用户重新导出地图后���幅全变了，此时只需在地图上点两个认识的地方（比如出生点、城堡），
- * 填入它们的方块坐标，就能反推出整幅图覆盖的世界范围 —— 不需要重新量像素。
- *
- * 推导（以 X 轴为例，Z 轴完全同理）：
- *   x = xMin + (px / W) * S           其中 S = xMax - xMin 是整幅图的世界跨度
- *   两点相减：x_b - x_a = (px_b - px_a) / W * S
- *   ⇒ S = (x_b - x_a) * W / (px_b - px_a)
- *   ⇒ xMin = x_a - (px_a / W) * S，xMax = xMin + S
- *
- * 退化情形一律返回 null（无法反解 / 结果不合理）：
- *   - 像素尺寸缺失或非正；
- *   - 任一坐标非数值；
- *   - 同一轴上两点像素重复（px_b == px_a 或 py_b == py_a）→ 分母为 0；
- *   - 同一轴上世界坐标相同（x_b == x_a）→ 跨度 S = 0；
- *   - X 反解结果 xMax <= xMin（左右颠倒，说明点填反了，X 没有"翻转"语义）；
- *   - Z 反解结果 |跨度| 近似 0。
- *
- * @param {{px:number, py:number, x:number, z:number}} a 地标 A
- * @param {{px:number, py:number, x:number, z:number}} b 地标 B
- * @param {{imageWidth:number, imageHeight:number}} opts 图片原始像素尺寸
- * @returns {null | {xMin:number, xMax:number, zMin:number, zMax:number, flipZ:boolean}}
- *
- * 关于返回值里的 flipZ（本次实现新增的附加字段，见交付说明）：
- *   如果 A/B 两点反推出「图片上边缘的世界 Z > 下边缘的世界 Z」，
- *   说明这张图是南北翻转的，此时返回 flipZ=true，且 zMin/zMax 已按
- *   「zMin 永远是世界最小值」的约定排好序，可直接喂给 createProjection。
- */
-export function calibrationFromTwoPoints(a, b, { imageWidth, imageHeight } = {}) {
-  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return null;
-
-  const w = toNum(imageWidth);
-  const h = toNum(imageHeight);
-  if (!(w > 0) || !(h > 0)) return null;
-
-  const apx = toNum(a.px);
-  const apy = toNum(a.py);
-  const bpx = toNum(b.px);
-  const bpy = toNum(b.py);
-  const ax = toNum(a.x);
-  const az = toNum(a.z);
-  const bx = toNum(b.x);
-  const bz = toNum(b.z);
-  if (![apx, apy, bpx, bpy, ax, az, bx, bz].every(Number.isFinite)) return null;
-
-  const dpx = bpx - apx;
-  const dpy = bpy - apy;
-  // 同一轴上像素重复 → 分母为 0，这道轴无法反解
-  if (Math.abs(dpx) < EPS || Math.abs(dpy) < EPS) return null;
-
-  // 整幅图对应的世界跨度
-  const spanX = ((bx - ax) * w) / dpx;
-  const spanZ = ((bz - az) * h) / dpy;
-  if (!Number.isFinite(spanX) || !Number.isFinite(spanZ)) return null;
-
-  // X 轴：左小右大才有意义（X 方向不存在"翻转"）
-  if (!(spanX > EPS)) return null;
-  // Z 轴：跨度绝对值太小 → 两点世界坐标相同，反解无意义
-  if (Math.abs(spanZ) < EPS) return null;
-
-  const xMin = ax - (apx / w) * spanX;
-  const xMax = xMin + spanX;
-  if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || !(xMax > xMin)) return null;
-
-  // py = 0 是图片上边缘，py = H 是下边缘
-  const topZ = az - (apy / h) * spanZ;
-  const bottomZ = topZ + spanZ;
-  if (!Number.isFinite(topZ) || !Number.isFinite(bottomZ)) return null;
-
-  // 上边缘的世界 Z 比下边缘大 ⇒ 这张图南北翻转
-  const flipZ = bottomZ < topZ;
-  const zMin = Math.min(topZ, bottomZ);
-  const zMax = Math.max(topZ, bottomZ);
-  if (!(zMax > zMin)) return null;
-
-  return { xMin, xMax, zMin, zMax, flipZ };
-}
-
-/* -------------------------------------------------------------------------- */
-/* 4. 「缩放 + 原点」→ 画幅                                                    */
+/* 3. 「缩放 + 原点」→ 画幅                                                    */
 /* -------------------------------------------------------------------------- */
 
 /**

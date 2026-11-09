@@ -3,8 +3,8 @@
  *
  * 只操作 index.html 里既有的节点：
  *   #sidebar #dimension-switch #waypoint-count #waypoint-search #search-clear
- *   #calibration-notice #waypoint-list #waypoint-empty
- *   #sidebar-error #dimension-meta #site-title #site-subtitle #site-footer #footer-dim
+ *   #waypoint-list #waypoint-empty
+ *   #sidebar-error #site-title #site-subtitle
  *   #sidebar-backdrop #btn-collapse #sidebar-toggle #btn-all-visible #btn-all-hidden
  *   #btn-sort #btn-toggle-labels #btn-fit #btn-grid #btn-reset #btn-copy-link
  *   #zoom-in #zoom-out #zoom-fit
@@ -30,12 +30,8 @@ const NODES = {
   waypointList: 'waypoint-list',
   waypointEmpty: 'waypoint-empty',
   sidebarError: 'sidebar-error',
-  calibrationNotice: 'calibration-notice',
-  dimensionMeta: 'dimension-meta',
   siteTitle: 'site-title',
   siteSubtitle: 'site-subtitle',
-  siteFooter: 'site-footer',
-  footerDim: 'footer-dim',
   backdrop: 'sidebar-backdrop',
   btnCollapse: 'btn-collapse',
   sidebarToggle: 'sidebar-toggle',
@@ -132,7 +128,7 @@ export class Sidebar {
    * 公开 API（契约 §5）
    * ------------------------------------------------------------------ */
 
-  /** @param {{title?: string, subtitle?: string, footer?: string}} info */
+  /** @param {{title?: string, subtitle?: string}} info */
   setSiteInfo(info) {
     if (!info || typeof info !== 'object') return;
     if (typeof info.title === 'string' && info.title) {
@@ -141,9 +137,6 @@ export class Sidebar {
     }
     if (typeof info.subtitle === 'string' && this.el.siteSubtitle) {
       this.el.siteSubtitle.textContent = info.subtitle;
-    }
-    if (typeof info.footer === 'string' && this.el.siteFooter) {
-      this.el.siteFooter.textContent = info.footer;
     }
   }
 
@@ -162,8 +155,7 @@ export class Sidebar {
       if (fallback) this._activeDimensionId = String(fallback.id);
     }
     this._renderDimensions();
-    this._updateFooterDimension();
-    this._renderDimensionMeta();
+    this._updateBodyDimension();
   }
 
   /**
@@ -194,8 +186,7 @@ export class Sidebar {
 
     this._renderDimensions();
     this._renderGroups();
-    this._renderDimensionMeta();
-    this._updateFooterDimension();
+    this._updateBodyDimension();
     this._renderList();
   }
 
@@ -232,12 +223,6 @@ export class Sidebar {
     for (const item of list.querySelectorAll('.waypoint-item')) {
       item.classList.toggle('is-highlighted', item.dataset.id === this._highlightId);
     }
-  }
-
-  /** 是否显示「未校准」横幅。 */
-  setCalibrationNotice(show) {
-    if (!this.el.calibrationNotice) return;
-    this.el.calibrationNotice.hidden = !show;
   }
 
   /**
@@ -545,8 +530,7 @@ export class Sidebar {
     this._activeDimensionId = id;
     this._dimension = null;
     this._renderDimensions();
-    this._updateFooterDimension();
-    this._renderDimensionMeta();
+    this._updateBodyDimension();
     this._emit('onDimensionChange', id);
   }
 
@@ -747,61 +731,11 @@ export class Sidebar {
     this._renderList();
   }
 
-  _renderDimensionMeta() {
-    const box = this.el.dimensionMeta;
-    if (!box) return;
-    const dim = this._currentDimension();
-    box.textContent = '';
-    if (!dim) {
-      box.hidden = true;
-      return;
-    }
-    box.hidden = false;
-
-    const calibration = dim.calibration && typeof dim.calibration === 'object' ? dim.calibration : null;
-    const projection = this._projection && typeof this._projection === 'object' ? this._projection : null;
-    const pick = (key) => {
-      if (calibration && Number.isFinite(calibration[key])) return calibration[key];
-      if (projection && Number.isFinite(projection[key])) return projection[key];
-      return null;
-    };
-    const xMin = pick('xMin');
-    const xMax = pick('xMax');
-    const zMin = pick('zMin');
-    const zMax = pick('zMax');
-
-    const row = document.createElement('div');
-    row.className = 'dim-meta-row';
-
-    const name = document.createElement('span');
-    name.className = 'dim-meta-name';
-    name.textContent = dim.name != null ? String(dim.name) : String(dim.id);
-
-    const state = document.createElement('span');
-    state.className = 'dim-meta-state';
-    const calibrated = !!(calibration && calibration.calibrated === true);
-    state.classList.add(calibrated ? 'is-ok' : 'is-warn');
-    state.textContent = calibrated ? '已校准' : '未校准';
-
-    row.append(name, state);
-
-    const bounds = document.createElement('div');
-    bounds.className = 'dim-meta-bounds';
-    if (xMin != null && xMax != null && zMin != null && zMax != null) {
-      bounds.textContent = `X ${roundBlock(xMin)} ~ ${roundBlock(xMax)} · Z ${roundBlock(zMin)} ~ ${roundBlock(zMax)}`;
-    } else {
-      bounds.textContent = '画幅未知（请校准）';
-    }
-
-    box.append(row, bounds);
-  }
-
-  _updateFooterDimension() {
+  _updateBodyDimension() {
     const dim = this._currentDimension();
     if (!dim) return;
     const id = String(dim.id);
     if (document.body) document.body.dataset.dimension = id;
-    if (this.el.footerDim) this.el.footerDim.textContent = dim.name != null ? String(dim.name) : id;
   }
 
   _renderList() {

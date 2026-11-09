@@ -475,7 +475,6 @@ async function captureFailure(id) {
         overlay: pick('#overlay', 2000),
         waypointList: pick('#waypoint-list', 2000),
         groupList: pick('#group-list', 1200),
-        calibrationNotice: pick('#calibration-notice'),
         markerSamples: [...document.querySelectorAll('#overlay .marker')]
           .slice(0, 3)
           .map((el) => el.outerHTML.slice(0, 400)),
@@ -507,15 +506,27 @@ async function checkIfReady(id, label, fn) {
  * 页面动作
  * ------------------------------------------------------------------ */
 
+/**
+ * 测试基建：全图适配（最小缩放，所有标记可见）。
+ * 「整图」按钮的新语义（出生点居中、放大视野）在 view.reset 里用真实点击单独断言；
+ * 其余检查只需要「全图可见」的前置状态，直接走 __mapApp.fitToContent
+ * （与 centerOnOrigin / applyDimension 同类的基建 API）。
+ */
 async function resetView() {
-  const clicked = await page.evalFn(() => {
-    const button = document.querySelector('#zoom-fit') || document.querySelector('#btn-fit');
-    if (!button) return false;
-    button.click();
+  const done = await page.evalFn(() => {
+    const api = window.__mapApp;
+    if (!api || typeof api.fitToContent !== 'function') return false;
+    api.fitToContent({ animate: false });
     return true;
   });
-  if (!clicked) throw new Error('找不到「整图」按钮（#zoom-fit / #btn-fit）');
+  if (!done) throw new Error('window.__mapApp.fitToContent 不可用，无法整图适配');
   await page.settle(260);
+}
+
+/** 真实鼠标点击「整图」按钮（#zoom-fit）—— 用户路径 */
+async function clickFitButton() {
+  await page.clickSelector('#zoom-fit');
+  await page.settle(500);
 }
 
 async function ensureSidebarOpen() {
@@ -1439,11 +1450,52 @@ async function main() {
     return `${summarizePositions(after)}；图片位移 ${moved.toFixed(0)}px，${compared} 个标记同步`;
   });
 
-  await checkIfReady('view.reset', '「整图」按钮可恢复视图', async () => {
-    await resetView();
+  await checkIfReady('view.reset', '「整图」按钮以出生点居中，缩放大于全图适配（不显示整张地图）', async () => {
+    const dimension = dimensionById('overworld');
+    const spawn =
+      dimension.waypoints.find((waypoint) => waypoint.icon === 'spawn') ||
+      dimension.waypoints.find((waypoint) => /^(spawn|wp)$/i.test(String(waypoint.id || ''))) ||
+      { x: 0, z: 0 };
+    const sx = spawn && Number.isFinite(spawn.x) ? spawn.x : 0;
+    const sz = spawn && Number.isFinite(spawn.z) ? spawn.z : 0;
+    await clickFitButton();
     const info = await page.evalFn(IMAGE_INFO);
-    if (!(info.rect.width > 0)) throw new Error('恢复视图后图片尺寸为 0');
-    return `图片 ${Math.round(info.rect.width)}×${Math.round(info.rect.height)}`;
+    if (!info) throw new Error('找不到底图元素');
+    if (!(info.rect.width > 0)) throw new Error('点击「整图」后图片尺寸为 0');
+    const result = await page.evalFn((x, z) => {
+      const api = window.__mapApp;
+      const vs = api.view.getViewState();
+      const proj = api.projection;
+      if (!vs || !proj || !vs.viewWidth) return null;
+      const center = {
+        x: (vs.viewWidth / 2 - vs.tx) / vs.scale,
+        y: (vs.viewHeight / 2 - vs.ty) / vs.scale,
+      };
+      const pt = proj.worldToImage(x, z);
+      const fitScale = vs.viewWidth / vs.imageWidth;
+      return {
+        scale: vs.scale,
+        fitScale,
+        dist:
+          pt && Number.isFinite(pt.px)
+            ? Math.hypot(center.x - pt.px, center.y - pt.py)
+            : null,
+        imageWidth: vs.imageWidth,
+        imageHeight: vs.imageHeight,
+      };
+    }, sx, sz);
+    if (!result) throw new Error('getViewState / projection 不可用，无法校验「整图」视图');
+    const problems = [];
+    if (!(result.dist != null && result.dist <= 3)) {
+      problems.push(`视图中心距出生点 ${result.dist != null ? result.dist.toFixed(1) : '?'} 图片像素（期望 ≤ 3）`);
+    }
+    if (!(result.scale > result.fitScale * 1.2)) {
+      problems.push(
+        `缩放 ${result.scale.toFixed(4)}，全图适配 ${result.fitScale.toFixed(4)}（期望 ≥ ×1.2，不要真正显示全部地图）`,
+      );
+    }
+    if (problems.length) throw new Error(problems.join('；'));
+    return `中心距出生点 ${result.dist.toFixed(1)}px · 缩放 ×${(result.scale / result.fitScale).toFixed(1)} 全图适配`;
   });
 
   /* ---------------- 4a. 瓦片底图（manifest 驱动 + 层级随缩放切换） ---------------- */
@@ -1761,123 +1813,6 @@ async function main() {
     }
     return `${items.length} 个路径点、${headers.length} 个分组头与 config 一致`;
   });
-
-  await checkIfReady(
-    'cal.crop-change',
-    '单图模式画幅变化后重新校准：标记自动对回（用新 calibration 手算，误差 < 1.5px）',
-    async () => {
-      const dimension = dimensionById('overworld');
-      await resetView();
-      const original = await page.evaluate(
-        `(() => {
-          const cal = window.__mapApp && window.__mapApp.state && window.__mapApp.state.calibration;
-          if (!cal) return null;
-          return { xMin: cal.xMin, xMax: cal.xMax, zMin: cal.zMin, zMax: cal.zMax, flipZ: !!cal.flipZ };
-        })()`,
-      );
-      if (!original) {
-        throw new Error('读取 window.__mapApp.state.calibration 失败（app.js 未暴露 __mapApp 调试接口）');
-      }
-      // 校准只对单图模式生效（瓦片维度的世界范围来自 manifest）。
-      // 临时加一个复用主世界图片与路径点的单图维度，专门验证重新校准后的重投影。
-      const imageDim = {
-        ...dimension,
-        id: 'test-image-cal',
-        name: '校准测试',
-        tiles: undefined,
-        calibration: original,
-      };
-      await page.evalFn((dim) => {
-        window.__mapApp.state.config.dimensions.push(dim);
-      }, imageDim);
-      await page.evalFn((id) => window.__mapApp.applyDimension(id), imageDim.id);
-      await page.settle(420);
-      // 模拟「重新导出地图」：画幅放大 1.5 倍并平移（X +200 / Z -150）
-      const centerX = (original.xMin + original.xMax) / 2;
-      const centerZ = (original.zMin + original.zMax) / 2;
-      const halfX = ((original.xMax - original.xMin) / 2) * 1.5;
-      const halfZ = ((original.zMax - original.zMin) / 2) * 1.5;
-      const changed = {
-        xMin: centerX - halfX + 200,
-        xMax: centerX + halfX + 200,
-        zMin: centerZ - halfZ - 150,
-        zMax: centerZ + halfZ - 150,
-        flipZ: original.flipZ,
-        calibrated: true,
-      };
-      // 不依赖固定的 castle 示例点：用 config 里第一个坐标有效的路径点。
-      const targetWaypoint =
-        dimension.waypoints.find((waypoint) => waypoint.id === 'castle') ||
-        dimension.waypoints.find(
-          (waypoint) => Number.isFinite(waypoint.x) && Number.isFinite(waypoint.z),
-        ) ||
-        dimension.waypoints[0];
-      if (!targetWaypoint) throw new Error('config 主世界没有可用的路径点，无法测试重新校准');
-      const targetId = targetWaypoint.id;
-      const targetName = targetWaypoint.name || targetId;
-      const beforeMarkers = await page.evalFn(MARKER_RECTS);
-      const beforeTarget = beforeMarkers.find((marker) => marker.id === targetId);
-      let markerMove = 0;
-      let positionReport = null;
-      try {
-        const applied = await page.evalFn((calibration) => {
-          const api = window.__mapApp;
-          if (!api || typeof api.applyCalibration !== 'function') {
-            return { ok: false, reason: 'window.__mapApp.applyCalibration 不可用' };
-          }
-          api.applyCalibration(calibration);
-          const now = api.state && api.state.calibration ? { ...api.state.calibration } : null;
-          return { ok: true, now };
-        }, changed);
-        if (!applied.ok) throw new Error(applied.reason);
-        await page.settle(280);
-
-        const afterMarkers = await page.evalFn(MARKER_RECTS);
-        const afterTarget = afterMarkers.find((marker) => marker.id === targetId);
-        if (beforeTarget && afterTarget) {
-          markerMove = Math.hypot(
-            afterTarget.rect.left - beforeTarget.rect.left,
-            afterTarget.rect.top - beforeTarget.rect.top,
-          );
-        }
-        if (!(markerMove > 5)) {
-          throw new Error(
-            `applyCalibration 后标记几乎没移动（${targetName} 位移 ${markerMove.toFixed(1)}px，期望 > 5px），校准可能未生效`,
-          );
-        }
-        // 校准改了投影但不改视图：瓦片世界宽（47104 方块）下整图缩放很小，
-        // 复用主世界图片的测试维度会缩成视口一角，重拟合后才谈得上「标记在视口内可校验」。
-        await resetView();
-        positionReport = await measurePositions({ ...imageDim, calibration: changed });
-        assertPositions(positionReport, { minChecked: 3, phase: '应用新画幅后' });
-      } finally {
-        await page
-          .evalFn((calibration) => window.__mapApp.applyCalibration(calibration), {
-            xMin: original.xMin,
-            xMax: original.xMax,
-            zMin: original.zMin,
-            zMax: original.zMax,
-            flipZ: original.flipZ,
-            calibrated: true,
-          })
-          .catch(() => {});
-        await page.settle(220);
-        // 清理临时维度并切回正式的主世界
-        await page.evalFn((id) => {
-          const list = window.__mapApp.state.config.dimensions;
-          const index = list.findIndex((item) => item.id === id);
-          if (index >= 0) list.splice(index, 1);
-        }, imageDim.id);
-        await page.evalFn(() => window.__mapApp.applyDimension('overworld'));
-        await page.settle(320);
-        await resetView();
-      }
-      return (
-        `单图模式新画幅 X[${changed.xMin.toFixed(0)}, ${changed.xMax.toFixed(0)}] Z[${changed.zMin.toFixed(0)}, ${changed.zMax.toFixed(0)}]，` +
-        `${targetName} 位移 ${markerMove.toFixed(0)}px；${summarizePositions(positionReport)}`
-      );
-    },
-  );
 
   /* ---------------- 5. 侧栏交互 ---------------- */
   await checkIfReady('sidebar.search', '搜索框输入后列表项减少，清空后恢复', async () => {
@@ -2944,6 +2879,356 @@ async function main() {
     await page.settle(320);
     return `toast「${setup.toastText}」· 视野保持 ${JSON.stringify(setup.before)}`;
   });
+
+  /* ---------------- 6.5 皮肤预览 ---------------- */
+  await checkIfReady(
+    'skin.panel',
+    '皮肤预览：互斥开合、非法 ID 报错、离线导入（64×64 / 64×32 / 128×128）、默认静止、动作按钮、旋转开关与左键拖拽停转、回正复位相机、右键平移不穿透、Esc 关闭',
+    async () => {
+      const skinErrorsAtStart = await errorCount();
+      const clickCenter = async (id) => {
+        const pt = await page.evalFn((sel) => {
+          const el = document.getElementById(sel);
+          if (!el) throw new Error(`缺少 #${sel}`);
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) throw new Error(`#${sel} 不可见`);
+          return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+        }, id);
+        await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y, button: 'none' });
+        await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+        await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+        await page.settle(160);
+      };
+      const readButtons = async () =>
+        page.evalFn(() => ({
+          walk: document.getElementById('skin-act-walk').getAttribute('aria-pressed'),
+          run: document.getElementById('skin-act-run').getAttribute('aria-pressed'),
+          idle: document.getElementById('skin-act-idle').getAttribute('aria-pressed'),
+          rotate: document.getElementById('skin-act-rotate').getAttribute('aria-pressed'),
+        }));
+
+      // 先真实点击打开换算面板，再点「皮肤」验证互斥收起
+      await clickCenter('btn-convert');
+      const convertOpen = await page.evalFn(() => !document.getElementById('convert-panel').hidden);
+      if (!convertOpen) throw new Error('换算面板未打开（互斥测试的前置条件失败）');
+      await clickCenter('btn-skin');
+      const opened = await page.evalFn(() => ({
+        skin: !document.getElementById('skin-panel').hidden,
+        skinPressed: document.getElementById('btn-skin').getAttribute('aria-pressed'),
+        convert: document.getElementById('convert-panel').hidden,
+        convertPressed: document.getElementById('btn-convert').getAttribute('aria-pressed'),
+      }));
+      if (!opened.skin || opened.skinPressed !== 'true') {
+        throw new Error(`点「皮肤」后面板未打开（skin=${opened.skin} pressed=${opened.skinPressed}）`);
+      }
+      if (!opened.convert || opened.convertPressed !== 'false') {
+        throw new Error(`皮肤面板打开时换算面板应互斥收起（convert=${opened.convert} pressed=${opened.convertPressed}）`);
+      }
+
+      // 非法 ID 走本地校验，不发网络请求（离线安全）
+      await page.evalFn(() => {
+        document.getElementById('skin-id').value = 'a-b';
+      });
+      await clickCenter('skin-load');
+      const badStatus = await page.evalFn(() => {
+        const s = document.getElementById('skin-status');
+        return { text: s.textContent, error: s.classList.contains('is-error') };
+      });
+      if (!badStatus.error || !/ID 无效/.test(badStatus.text)) {
+        throw new Error(`非法 ID 应报错，实际 status="${badStatus.text}"`);
+      }
+
+      // 页内生成 64×64 PNG → DataTransfer 导入（离线主力路径）
+      await page.evalFn(async () => {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 64;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#4caf50';
+        ctx.fillRect(8, 8, 8, 8); // 头前脸
+        ctx.fillStyle = '#2196f3';
+        ctx.fillRect(20, 20, 8, 12); // 身体前脸
+        const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+        const file = new File([blob], 'smoke-skin.png', { type: 'image/png' });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const input = document.getElementById('skin-file');
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.waitFor(
+        () => {
+          const panel = window.__mapApp && window.__mapApp.skin;
+          const viewer = panel ? panel.getViewer() : null;
+          const s = document.getElementById('skin-status');
+          return (
+            viewer &&
+            viewer.playerObject &&
+            viewer.playerObject.skin &&
+            viewer.playerObject.skin.visible &&
+            s.classList.contains('is-ok') &&
+            /64×64/.test(s.textContent)
+          );
+        },
+        { timeout: 10_000, interval: 150, label: '皮肤导入完成且 3D 查看器就绪' },
+      );
+      const imported = await page.evalFn(() => ({
+        status: document.getElementById('skin-status').textContent,
+        fileName: document.getElementById('skin-file-name').textContent,
+        autoRotate: window.__mapApp.skin.getViewer().autoRotate,
+        animMode: window.__mapApp.skin.getAnimMode(),
+        isRotating: window.__mapApp.skin.isRotating(),
+      }));
+      if (!imported.fileName.includes('smoke-skin.png')) {
+        throw new Error(`导入文件名未显示（实际 "${imported.fileName}"）`);
+      }
+      if (imported.autoRotate !== false || imported.isRotating !== false) {
+        throw new Error(`导入后默认应静止不旋转（实际 autoRotate=${imported.autoRotate}）`);
+      }
+      if (imported.animMode !== 'idle') {
+        throw new Error(`导入后默认动画应为静止（实际 ${imported.animMode}）`);
+      }
+
+      // 记录初始相机位姿（回正按钮的对照基准：viewer 创建后相机未动过）
+      const camInit = await page.evalFn(() => {
+        const c = window.__mapApp.skin.getViewer().camera.position;
+        return { x: c.x, y: c.y, z: c.z };
+      });
+
+      // 按钮初始状态：静止 active，其余不 active
+      const btnInit = await readButtons();
+      if (btnInit.walk !== 'false' || btnInit.run !== 'false' || btnInit.idle !== 'true' || btnInit.rotate !== 'false') {
+        throw new Error(`初始按钮状态不符：${JSON.stringify(btnInit)}`);
+      }
+
+      // 真实点击 走路 → 奔跑 → 静止：动画实例更换 + aria-pressed 迁移
+      const animInit = await page.evalFn(() => window.__mapApp.skin.getViewer().animation);
+      await clickCenter('skin-act-walk');
+      const walkState = await page.evalFn(() => ({
+        mode: window.__mapApp.skin.getAnimMode(),
+        animation: window.__mapApp.skin.getViewer().animation,
+      }));
+      const walkBtn = await readButtons();
+      if (walkState.mode !== 'walk' || !walkState.animation) {
+        throw new Error(`点「走路」后动画未生效（mode=${walkState.mode} animation=${!!walkState.animation}）`);
+      }
+      if (walkBtn.walk !== 'true' || walkBtn.idle !== 'false') {
+        throw new Error(`点「走路」后按钮状态不符：${JSON.stringify(walkBtn)}`);
+      }
+      if (walkState.animation === animInit) throw new Error('走路动画实例未更换');
+      await clickCenter('skin-act-run');
+      const runState = await page.evalFn(() => ({
+        mode: window.__mapApp.skin.getAnimMode(),
+        animation: window.__mapApp.skin.getViewer().animation,
+      }));
+      const runBtn = await readButtons();
+      if (runState.mode !== 'run' || !runState.animation || runState.animation === walkState.animation) {
+        throw new Error(`点「奔跑」后动画未切换（mode=${runState.mode}）`);
+      }
+      if (runBtn.run !== 'true' || runBtn.walk !== 'false') {
+        throw new Error(`点「奔跑」后按钮状态不符：${JSON.stringify(runBtn)}`);
+      }
+      await clickCenter('skin-act-idle');
+      const idleState = await page.evalFn(() => ({
+        mode: window.__mapApp.skin.getAnimMode(),
+        animation: window.__mapApp.skin.getViewer().animation,
+      }));
+      const idleBtn = await readButtons();
+      if (idleState.mode !== 'idle' || !idleState.animation || idleState.animation === runState.animation) {
+        throw new Error(`点「静止」后动画未切换（mode=${idleState.mode}）`);
+      }
+      if (idleBtn.idle !== 'true' || idleBtn.run !== 'false') {
+        throw new Error(`点「静止」后按钮状态不符：${JSON.stringify(idleBtn)}`);
+      }
+
+      // 旋转开关：真实点击开 → autoRotate=true + 按钮 active
+      await clickCenter('skin-act-rotate');
+      const rotateOn = await page.evalFn(() => ({
+        autoRotate: window.__mapApp.skin.getViewer().autoRotate,
+        pressed: document.getElementById('skin-act-rotate').getAttribute('aria-pressed'),
+      }));
+      if (rotateOn.autoRotate !== true || rotateOn.pressed !== 'true') {
+        throw new Error(`点「旋转」后应自动旋转（autoRotate=${rotateOn.autoRotate} pressed=${rotateOn.pressed}）`);
+      }
+
+      // 左键拖拽画布：自动旋转停转 + 按钮复位 + 不穿透到地图
+      const stage = await page.evalFn(() => {
+        const r = document.getElementById('skin-canvas').getBoundingClientRect();
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      });
+      const before = await page.evalFn(() => window.__mapApp.worldAtViewCenter());
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stage.x, y: stage.y, button: 'none' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: stage.x, y: stage.y, button: 'left', clickCount: 1 });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stage.x + 60, y: stage.y - 40, button: 'left' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: stage.x + 60, y: stage.y - 40, button: 'left', clickCount: 1 });
+      await page.settle(250);
+      const afterDrag = await page.evalFn(() => ({
+        autoRotate: window.__mapApp.skin.getViewer().autoRotate,
+        rotatePressed: document.getElementById('skin-act-rotate').getAttribute('aria-pressed'),
+        center: window.__mapApp.worldAtViewCenter(),
+      }));
+      if (afterDrag.autoRotate !== false || afterDrag.rotatePressed !== 'false') {
+        throw new Error(`左键拖拽后应停转并复位按钮（autoRotate=${afterDrag.autoRotate} pressed=${afterDrag.rotatePressed}）`);
+      }
+      if (
+        !before || !afterDrag.center ||
+        before.x !== afterDrag.center.x || before.z !== afterDrag.center.z
+      ) {
+        throw new Error(
+          `皮肤画布拖拽不应移动地图视野（${JSON.stringify(before)} → ${JSON.stringify(afterDrag.center)}）`,
+        );
+      }
+
+      // 右键拖拽画布：平移相机（camera.position 变化）+ 地图视野不动
+      const camBefore = await page.evalFn(() => {
+        const c = window.__mapApp.skin.getViewer().camera.position;
+        return { x: c.x, y: c.y, z: c.z };
+      });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stage.x, y: stage.y, button: 'none' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: stage.x, y: stage.y, button: 'right', clickCount: 1 });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stage.x + 40, y: stage.y + 25, button: 'right' });
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: stage.x + 40, y: stage.y + 25, button: 'right', clickCount: 1 });
+      await page.settle(250);
+      const afterPan = await page.evalFn(() => {
+        const c = window.__mapApp.skin.getViewer().camera.position;
+        return { x: c.x, y: c.y, z: c.z, center: window.__mapApp.worldAtViewCenter() };
+      });
+      const camDelta =
+        Math.abs(afterPan.x - camBefore.x) +
+        Math.abs(afterPan.y - camBefore.y) +
+        Math.abs(afterPan.z - camBefore.z);
+      if (camDelta < 0.01) {
+        throw new Error(`右键拖拽应平移相机（camera.position 未变化：${JSON.stringify(camBefore)}）`);
+      }
+      if (
+        !before || !afterPan.center ||
+        before.x !== afterPan.center.x || before.z !== afterPan.center.z
+      ) {
+        throw new Error(
+          `皮肤画布右键平移不应移动地图视野（${JSON.stringify(before)} → ${JSON.stringify(afterPan.center)}）`,
+        );
+      }
+
+      // 回正按钮：旋转开启时点击 → 停转复位 + 相机回到初始位姿 + 模型转回正面
+      // （skinview3d 3.4.2 的 autoRotate 转的是 playerWrapper 模型，不是相机）
+      await clickCenter('skin-act-rotate'); // 再开旋转（此时相机已被拖拽/平移改过）
+      const modelYawBefore = await page.evalFn(() => {
+        const v = window.__mapApp.skin.getViewer();
+        return v.playerWrapper ? v.playerWrapper.rotation.y : null;
+      });
+      await clickCenter('skin-act-reset');
+      await page.settle(160);
+      const afterReset = await page.evalFn(() => {
+        const v = window.__mapApp.skin.getViewer();
+        const c = v.camera.position;
+        return {
+          x: c.x,
+          y: c.y,
+          z: c.z,
+          autoRotate: v.autoRotate,
+          rotatePressed: document.getElementById('skin-act-rotate').getAttribute('aria-pressed'),
+          modelYaw: v.playerWrapper ? v.playerWrapper.rotation.y : null,
+        };
+      });
+      const resetDelta =
+        Math.abs(afterReset.x - camInit.x) +
+        Math.abs(afterReset.y - camInit.y) +
+        Math.abs(afterReset.z - camInit.z);
+      if (resetDelta > 0.01) {
+        throw new Error(`回正后相机未回到初始位姿（${JSON.stringify(camInit)} → ${JSON.stringify(afterReset)}）`);
+      }
+      if (afterReset.autoRotate !== false || afterReset.rotatePressed !== 'false') {
+        throw new Error(`回正应停转并复位旋转按钮（autoRotate=${afterReset.autoRotate} pressed=${afterReset.rotatePressed}）`);
+      }
+      if (modelYawBefore === null || Math.abs(modelYawBefore) < 0.05) {
+        throw new Error(`旋转开启后模型应已转动（yaw=${modelYawBefore}），否则回正断言无意义`);
+      }
+      if (Math.abs(afterReset.modelYaw) > 0.001) {
+        throw new Error(`回正后模型应转回正面（yaw=${afterReset.modelYaw}）`);
+      }
+
+      // 旧版 64×32 皮肤导入：应自动补全为 64×64 并正常渲染
+      await page.evalFn(async () => {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 32;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#4caf50';
+        ctx.fillRect(8, 8, 8, 8); // 头前脸
+        ctx.fillStyle = '#e91e63';
+        ctx.fillRect(20, 20, 8, 12); // 身体前脸
+        ctx.fillStyle = '#ff9800';
+        ctx.fillRect(44, 20, 4, 12); // 右臂前脸（补全后应镜像到左臂）
+        ctx.fillRect(4, 20, 4, 12); // 右腿前脸（补全后应镜像到左腿）
+        const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+        const file = new File([blob], 'smoke-legacy.png', { type: 'image/png' });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const input = document.getElementById('skin-file');
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.waitFor(
+        () => {
+          const s = document.getElementById('skin-status');
+          return s.classList.contains('is-ok') && /旧版，已补全为 64×64/.test(s.textContent);
+        },
+        { timeout: 10_000, interval: 150, label: '旧版 64×32 皮肤补全并渲染完成' },
+      );
+      const legacy = await page.evalFn(() => ({
+        status: document.getElementById('skin-status').textContent,
+        visible: window.__mapApp.skin.getViewer().playerObject.skin.visible,
+      }));
+      if (!legacy.visible) throw new Error('旧版皮肤补全后未渲染（skin.visible=false）');
+
+      // 128×128（HD）皮肤导入：原生渲染，不走补全路径
+      await page.evalFn(async () => {
+        const c = document.createElement('canvas');
+        c.width = 128;
+        c.height = 128;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#e91e63';
+        ctx.fillRect(16, 16, 16, 16); // 头前脸（128 空间）
+        ctx.fillStyle = '#4caf50';
+        ctx.fillRect(40, 40, 16, 24); // 身体前脸
+        const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+        const file = new File([blob], 'smoke-hd128.png', { type: 'image/png' });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const input = document.getElementById('skin-file');
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.waitFor(
+        () => {
+          const s = document.getElementById('skin-status');
+          return s.classList.contains('is-ok') && /128×128/.test(s.textContent);
+        },
+        { timeout: 10_000, interval: 150, label: '128×128 HD 皮肤导入并渲染完成' },
+      );
+      const hd = await page.evalFn(() => ({
+        status: document.getElementById('skin-status').textContent,
+        visible: window.__mapApp.skin.getViewer().playerObject.skin.visible,
+      }));
+      if (!hd.visible) throw new Error('128×128 皮肤未渲染（skin.visible=false）');
+      if (/补全/.test(hd.status)) throw new Error(`128×128 不应走补全路径（status="${hd.status}"）`);
+
+      // Esc 关闭并复位按钮
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await page.settle(160);
+      const closed = await page.evalFn(() => ({
+        hidden: document.getElementById('skin-panel').hidden,
+        pressed: document.getElementById('btn-skin').getAttribute('aria-pressed'),
+      }));
+      if (!closed.hidden || closed.pressed !== 'false') {
+        throw new Error(`Esc 后面板应关闭且按钮复位（hidden=${closed.hidden} pressed=${closed.pressed}）`);
+      }
+
+      await expectNoErrorsSince(skinErrorsAtStart, '皮肤预览');
+      return `导入 ${imported.fileName}（${imported.status}）· 旧版 64×32 补全（${legacy.status}）· 128×128 HD（${hd.status}）· 默认静止 · 动作/旋转/回正按钮正常 · 右键平移不穿透 · 互斥与 Esc 正常`;
+    },
+  );
 
   /* ---------------- 7. 窄屏 ---------------- */
   await checkIfReady(

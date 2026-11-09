@@ -34,7 +34,7 @@ tests/                     qa-dev 拥有
 
 ```jsonc
 "calibration": {
-  "calibrated": true,         // false 时 UI 显示「未校准」提示
+  "calibrated": true,         // 是否已确认校准（历史字段，站点 UI 不再显示提示）
   "xMin": -1792, "xMax": 1792,  // 图片左边缘 = 世界 X 最小值；右边缘 = 最大值
   "zMin": -2560, "zMax": 2560,  // 图片上边缘 = 世界 Z 最小值；下边缘 = 最大值
   "flipZ": false,             // 可选，北在下时置 true（默认 false）
@@ -73,9 +73,6 @@ export function createProjection({ xMin, xMax, zMin, zMax, imageWidth, imageHeig
 
 /** 校验并返回规范化校准对象；缺字段返回 null */
 export function normalizeCalibration(raw, { imageWidth, imageHeight })
-
-/** 由「两点已知地标」反解画幅。A/B 为 {px,py,x,z}。同一轴两点像素重复则返回 null */
-export function calibrationFromTwoPoints(a, b, { imageWidth, imageHeight })  // -> {xMin,xMax,zMin,zMax}
 
 /** 由「缩放+原点」转成 bounds */
 export function boundsFromScale({ pixelsPerBlock, originX, originZ }, { imageWidth, imageHeight })
@@ -218,12 +215,11 @@ export class Sidebar {
     onDimensionChange(id), onSearch(query), onAction(name),   // name 见下
     onToggleCollapsed(collapsed),
   })
-  setSiteInfo({ title, subtitle, footer })
+  setSiteInfo({ title, subtitle })
   setDimensions(dimensions, activeId)        // 渲染 #dimension-switch 与 #sidebar 内维度信息
   setData({ waypoints, groups, projection, dimension })  // 渲染分组 + 列表
   setActiveWaypoint(id)     // 列表高亮并滚动到可见
   setHighlight(id)          // hover 高亮（不滚动）
-  setCalibrationNotice(show)   // 是否显示「未校准」横幅
   setStats({ total, visible, hidden })  // 更新计数徽标
   setCollapsed(bool)
   isCollapsed()
@@ -252,12 +248,14 @@ sidebar.js 负责绑定它们。
 - 搜索（`#waypoint-search`）时强制展开所有分组，避免「搜到了却看不见」；清空搜索后恢复用户之前的折叠状态。
 - 分组顺序跟随 `config.json` 里 `dimensions[].groups` 的定义顺序，组内顺序跟随 `waypoints` 数组顺序。
 
-### 5.y 默认视野（进入页面 / 「原点」按钮）
+### 5.y 默认视野（进入页面 / 「原点」 / 「整图」按钮）
 
 - 进入某个维度（且没有 `#dim/...` 深链）时，默认**聚焦世界原点 (0,0)**，视野横向约 `ui.defaultSpanBlocks`（默认 **1024**）个方块，
   不再使用「整图适配」（那是最小缩放，1 方块只占约 0.13 屏幕像素）。
 - 左下角 **「原点」(#btn-reset)** 与进入页面时**完全同一行为**：回到原点 + 恢复默认视野比例。
-- **「整图」(#btn-fit / #zoom-fit)** 仍是整图适配；`#btn-reset` 不再复用 `MapView.resetView()`。
+- **「整图」(#btn-fit / #zoom-fit)** 不再整图适配：改为**以出生点为中心**，视野横向约 **1536** 个方块
+  （`app.js` 的 `FIT_SPAN_BLOCKS`）。出生点 = 当前维度 `icon === 'spawn'` 的路径点（其次 id 叫 `spawn`/`wp`），
+  找不到就回退世界原点 (0,0)。真正的整图适配（最小缩放）仍可通过一路滚轮缩小到达（`minScaleFit` 兜底）。
 - URL 深链 `#dim=<id>&x=<世界X>&z=<世界Z>&s=<缩放>` 优先于默认视野；`#dim=<id>&wp=<路径点id>` 会聚焦该路径点。
 - 想调整"初始看多大一片"：在 `config.json` 里设 `ui.defaultSpanBlocks`（64~16384）。
 
@@ -273,8 +271,8 @@ sidebar.js 负责绑定它们。
   校准统一在 **SteveServerMapConfig** 配置工具里做，写完 `config.json` 发布即可。
 - 同时移除「本地校准覆盖」（`localStorage['steveservermap.calibration.v1']`）：画幅现在**只**来自 `config.json`，
   不会再出现"某台电脑上位置和别人的不一样"。旧的存储键不再读取（保留也不会生效）。
-- 保留的 API：`window.__mapApp.applyCalibration(calibration)`（供自动化测试模拟画幅变化）、`resolveCalibration()`。
-- `#calibration-notice` 仍在（画幅未校准时提示），只是不再带按钮。
+- 2026-11-10：`window.__mapApp.applyCalibration()` 调试 API 与 `#calibration-notice` 未校准横幅
+  一并移除（画幅固定后站内不再需要校准通道）；保留 `resolveCalibration()`。
 - `assets/css/style.css` 的 07 段（校准向导样式）已删除。
 
 ### 5.y 测距（`assets/js/measure.js`）
@@ -360,7 +358,7 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 
 - 全局变量：`--bg --panel --panel-2 --border --text --muted --accent --accent-2 --danger --radius --shadow`
 - 侧栏展开宽度 `--sidebar-w: 320px`；`body[data-sidebar="collapsed"]` 时侧栏移出（移动端为覆盖抽屉）。
-- `.app` 为 CSS Grid：`grid-template-rows: auto 1fr auto`，顶栏 / 主体 / 页脚。
+- `.app` 为 CSS Grid：`grid-template-rows: auto 1fr`，顶栏 / 主体（页脚已于 2026-11-10 移除）。
 - 必须包含 `[hidden] { display: none !important; }`
 - 深色主题（背景接近 `#0f1210`），强调色 Minecraft 草绿 `#5ad26f`。
 - 响应式断点：`max-width: 860px` 走抽屉模式，`#sidebar-backdrop` 显示。
@@ -479,8 +477,8 @@ document.body.dataset.base   // 'tiles' | 'image' | 'empty'
 - 命中 `#map-image` 的旧断言已改为「当前底图元素」`#map-image:not([hidden]), #map-canvas:not([hidden])`。
 - 缺瓦片的 404 由 `createDiagnostics(page, { ignore })` 放行（`/tiles/<dim>/tiles/<l>/<x>_<y>.png` 的 404 不算错误），
   否则 `run.console` 会被正常的缺瓦片刷满。
-- **限制**：瓦片维度的世界范围由 manifest 决定，`window.__mapApp.applyCalibration()` 对它无效（会 toast 提示并忽略）；
-  `cal.crop-change` 这类「改画幅后重新校准」的用例只适用于单张图片维度。
+- **限制**：瓦片维度的世界范围由 manifest 决定，与 `config.json` 里该维度的 `calibration` 无关
+  （后者只作说明）。
 
 ### 10.5 版本参数与更新徽标（2026-11-06）
 
@@ -491,7 +489,8 @@ document.body.dataset.base   // 'tiles' | 'image' | 'empty'
   manifest 缺失时为 `''`。
 - **更新徽标**：`formatGeneratedAt(iso, now)` 导出纯函数 —— `瓦片更新于 <本地日期>（今天/昨天/N 天前）`。
   两个日界都取**本地午夜**，`Math.round` 吸收夏令时造成的 23/25 小时天（UTC+8 不会把昨天算成今天）。
-  页脚状态栏（`updateFooterStatus`）在 `state.tileset.generatedAt` 存在时显示该徽标。
+  侧栏底脚的 `#tiles-time`（`updateTilesTime`，左下角视图按钮上侧、无边框纯文本）在
+  `state.tileset.generatedAt` 存在时显示该徽标（2026-11-10 起：页脚 → 顶栏 → 最终定在侧栏底脚）。
 - 回归：`tests/tiles-regressions.test.mjs` 覆盖 generatedAt 透传 / 版本净化 / 徽标文案（今天/昨天/N 天前/非法输入）。
 
 ## 11. 坐标换算（`assets/js/converter.js`，2026-11-06）

@@ -63,7 +63,7 @@
             "description": "画幅校准：把图片像素映射到世界坐标。画幅变化后只需改这里。",
             "additionalProperties": true,
             "properties": {
-              "calibrated": { "type": "boolean", "description": "是否已确认校准（false 时界面提示需校准）" },
+              "calibrated": { "type": "boolean", "description": "是否已确认校准（历史字段，站点 UI 不再显示提示）" },
               "xMin": { "type": "number", "description": "图片左边缘对应的世界 X" },
               "xMax": { "type": "number", "description": "图片右边缘对应的世界 X" },
               "zMin": { "type": "number", "description": "图片上边缘对应的世界 Z" },

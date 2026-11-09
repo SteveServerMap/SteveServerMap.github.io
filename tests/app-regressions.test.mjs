@@ -45,7 +45,7 @@ function harness(dimensions, options = {}) {
     setViewState() {},
   };
   const sidebar = {
-    setDimensions() {}, setActiveWaypoint() {}, setCalibrationNotice() {},
+    setDimensions() {}, setActiveWaypoint() {},
     setLoading(value) { this.loading = value; },
     setData(value) { this.data = value; },
     setStats(value) { this.stats = value; },
