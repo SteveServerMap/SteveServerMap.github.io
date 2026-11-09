@@ -992,19 +992,30 @@ export class MapView {
   /* 事件：指针（拖拽 / 捏合 / 点击）                                        */
   /* ====================================================================== */
 
+  /** 目标是否命中路径点标记本体（含 pin / label / 叠堆角标） */
+  _isMarkerTarget(target) {
+    return !!(target && typeof target.closest === 'function' && target.closest('.marker'));
+  }
+
   _onPointerDown(event) {
     if (this._destroyed) return;
-    if (this._isIgnoredTarget(event.target)) return;        // 标记 / 弹窗 / 缩放面板…
+    const onMarker = this._isMarkerTarget(event.target);
+    // 标记上起手：进入拖拽跟踪（移动越阈值转平移），原地松手仍由标记自己的 click 选中；
+    // 弹窗 / 缩放面板等其余 UI 照旧完全忽略。
+    if (this._isIgnoredTarget(event.target) && !onMarker) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
 
     this._cancelAnim();
     this._pendingAutoFit = false;
 
     this._pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    try {
-      // 指针捕获：拖出视口（甚至拖出窗口）也能继续收到 move / up
-      this.viewport.setPointerCapture(event.pointerId);
-    } catch { /* 某些旧环境不支持，忽略 */ }
+    if (!onMarker) {
+      try {
+        // 指针捕获：拖出视口（甚至拖出窗口）也能继续收到 move / up。
+        // 标记起手时先不捕获：捕获会改写 mouseup/click 的目标，原地松手就选不中标记了。
+        this.viewport.setPointerCapture(event.pointerId);
+      } catch { /* 某些旧环境不支持，忽略 */ }
+    }
 
     if (this._pointers.size >= 2) {
       // 双指：进入捏合，取消单指拖拽，避免松手时误触发 click
@@ -1022,6 +1033,7 @@ export class MapView {
       startTx: this.tx,
       startTy: this.ty,
       moved: false,
+      fromMarker: onMarker,
     };
     this.viewport.style.cursor = 'grabbing';
   }
@@ -1047,7 +1059,13 @@ export class MapView {
     if (drag && drag.pointerId === event.pointerId) {
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
-      if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) drag.moved = true;
+      if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+        drag.moved = true;
+        if (drag.fromMarker) {
+          // 越过阈值才捕获：此后的 move/up 重定向到视口，拖拽松手不会误点标记
+          try { this.viewport.setPointerCapture(event.pointerId); } catch { /* 忽略 */ }
+        }
+      }
       if (drag.moved) {
         this._commit({
           scale: this.scale,

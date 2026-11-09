@@ -1450,6 +1450,121 @@ async function main() {
     return `${summarizePositions(after)}；图片位移 ${moved.toFixed(0)}px，${compared} 个标记同步`;
   });
 
+  await checkIfReady('pos.drag-marker', '标记上起手拖拽 = 平移地图且不选中；原地松手 = 选中并打开详情卡', async () => {
+    const dimension = dimensionById('overworld');
+    const info = await page.evalFn(IMAGE_INFO);
+    const viewport = info?.viewport;
+    if (!viewport) throw new Error('找不到 #viewport 尺寸');
+
+    const pickMarker = () =>
+      page.evalFn(
+        (vp) => {
+          const margin = 60;
+          for (const el of document.querySelectorAll('#overlay .marker')) {
+            if (!el.dataset.id) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) continue;
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            if (cx < vp.left + margin || cx > vp.left + vp.width - margin) continue;
+            if (cy < vp.top + margin || cy > vp.top + vp.height - margin) continue;
+            const hit = document.elementFromPoint(cx, cy);
+            const top = hit ? hit.closest('.marker') : null;
+            if (!top || !top.dataset.id) continue;
+            return { id: String(top.dataset.id), x: cx, y: cy, hit: `${hit.tagName}.${hit.className}` };
+          }
+          return null;
+        },
+        viewport,
+      );
+
+    // 清掉此前测试可能残留的选中态（叠堆轮换依赖 selectedId，残留会影响断言）
+    await page.evalFn(() => {
+      window.__mapApp.markers.setSelected(null);
+      window.__mapApp.state.activeWaypointId = null;
+    });
+
+    let marker = await pickMarker();
+    if (!marker) throw new Error('视口内找不到可操作的路径点标记');
+
+    // 路径 1：原地按下松开（真实鼠标、不移动）→ 选中 + 详情卡
+    await page.click(marker.x, marker.y);
+    await page.settle(420);
+    const clicked = await page.evalFn(() => {
+      const popup = document.querySelector('.marker-popup');
+      return {
+        active: window.__mapApp.state.activeWaypointId ?? null,
+        popup: popup ? !popup.hidden : false,
+      };
+    });
+    if (String(clicked.active) !== marker.id) {
+      throw new Error(`点标记「${marker.id}」未选中：active=${JSON.stringify(clicked.active)}`);
+    }
+    if (!clicked.popup) throw new Error(`点标记「${marker.id}」未打开详情卡`);
+
+    // 路径 1b：按下后微动 2px（未越 4px 阈值）松手 → 仍算点击选中
+    await page.evalFn(() => {
+      window.__mapApp.markers.setSelected(null);
+      window.__mapApp.state.activeWaypointId = null;
+    });
+    const micro = { x: marker.x, y: marker.y };
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: micro.x, y: micro.y, button: 'none', buttons: 0, pointerType: 'mouse' });
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: micro.x, y: micro.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: micro.x + 2, y: micro.y + 1, button: 'left', buttons: 1, pointerType: 'mouse' });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: micro.x + 2, y: micro.y + 1, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
+    await page.settle(420);
+    const microClick = await page.evalFn(() => {
+      const popup = document.querySelector('.marker-popup');
+      return {
+        active: window.__mapApp.state.activeWaypointId ?? null,
+        popup: popup ? !popup.hidden : false,
+      };
+    });
+    if (String(microClick.active) !== marker.id || !microClick.popup) {
+      throw new Error(`按下后微动 2px 松手应仍算点击选中「${marker.id}」：${JSON.stringify(microClick)}`);
+    }
+
+    // 收起详情卡并清空选中（setSelected(null) 不回写 app 状态，需一并清）
+    await page.evalFn(() => {
+      window.__mapApp.markers.setSelected(null);
+      window.__mapApp.state.activeWaypointId = null;
+    });
+    await page.settle(160);
+
+    // 路径 2：按住标记拖拽 +120,+80 → 地图平移，且不选中
+    marker = await pickMarker();
+    if (!marker) throw new Error('收起详情卡后找不到可拖拽的路径点标记');
+    const before = await measurePositions(dimension);
+    await page.drag({
+      from: { x: marker.x, y: marker.y },
+      to: { x: marker.x + 120, y: marker.y + 80 },
+      steps: 12,
+    });
+    await page.settle(260);
+    const after = await measurePositions(dimension);
+    const movedPx = Math.hypot(
+      after.info.rect.left - before.info.rect.left,
+      after.info.rect.top - before.info.rect.top,
+    );
+    if (movedPx < 10) {
+      throw new Error(
+        `标记「${marker.id}」上起手拖拽未平移地图：图片位移 ${movedPx.toFixed(1)}px（起点命中 ${marker.hit}）`,
+      );
+    }
+    const dragged = await page.evalFn(() => {
+      const popup = document.querySelector('.marker-popup');
+      return {
+        active: window.__mapApp.state.activeWaypointId ?? null,
+        popup: popup ? !popup.hidden : false,
+      };
+    });
+    if (dragged.active != null || dragged.popup) {
+      throw new Error(`拖拽松手后不应选中标记/打开详情卡：${JSON.stringify(dragged)}`);
+    }
+    assertPositions(after, { minChecked: 1, phase: '标记拖拽后' });
+    return `原地松开/微动 2px 均选中「${marker.id}」；标记上拖拽平移 ${movedPx.toFixed(0)}px 未选中`;
+  });
+
   await checkIfReady('view.reset', '「整图」按钮以出生点居中，缩放大于全图适配（不显示整张地图）', async () => {
     const dimension = dimensionById('overworld');
     const spawn =

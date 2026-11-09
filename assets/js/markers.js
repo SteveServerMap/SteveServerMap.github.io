@@ -694,8 +694,9 @@ export class MarkerLayer {
   _handlePointerDown(event) {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    // 点击标记 / 弹窗时不要触发地图拖拽与 onMapClick（MapView 的点击判定基于 pointerdown）。
-    if (target.closest('.marker') || (this._popup && this._popup.contains(target))) {
+    // 弹窗上的按下不交给地图（弹窗自身可能要滚动）。
+    // 标记本体放行冒泡：viewer 会跟踪按下——移动越阈值转地图拖拽，原地松手仍由 click 选中。
+    if (this._popup && this._popup.contains(target)) {
       event.stopPropagation();
     }
   }
