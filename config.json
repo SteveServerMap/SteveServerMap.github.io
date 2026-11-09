@@ -53,6 +53,12 @@
           "name": "熔炉组",
           "color": "#ff7ab6",
           "visible": true
+        },
+        {
+          "id": "group-3",
+          "name": "常世樱三岛（私有）",
+          "color": "#b485ff",
+          "visible": true
         }
       ],
       "waypoints": [
@@ -87,7 +93,8 @@
           "x": 166,
           "z": 158,
           "group": "default",
-          "icon": "pin"
+          "icon": "pin",
+          "description": "未包含小屋结构，需要红石请去下方女巫塔"
         },
         {
           "id": "wp-5",
@@ -176,6 +183,144 @@
           "z": -106,
           "group": "default",
           "icon": "pin"
+        },
+        {
+          "id": "wp-16",
+          "name": "甘蔗机",
+          "x": 927,
+          "z": -975,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-17",
+          "name": "100倍熔炉组",
+          "x": 375,
+          "z": -200,
+          "group": "group-2",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-18",
+          "name": "贝贝农场",
+          "x": 630,
+          "z": -1135,
+          "group": "default",
+          "icon": "pin",
+          "description": "好像坏了，雪人被服务器扫掉了"
+        },
+        {
+          "id": "wp-19",
+          "name": "女巫塔",
+          "x": 53,
+          "z": 356,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-20",
+          "name": "四核刷铁机",
+          "x": 264,
+          "z": 664,
+          "group": "group",
+          "icon": "diamond"
+        },
+        {
+          "id": "wp-21",
+          "name": "守卫者农场",
+          "x": 206,
+          "z": 4197,
+          "group": "default",
+          "icon": "pin",
+          "description": "双维度的，地狱收集点需要问群友"
+        },
+        {
+          "id": "wp-22",
+          "name": "村民交易所",
+          "x": 1,
+          "z": -142,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-23",
+          "name": "主城出版社",
+          "x": -34,
+          "z": -202,
+          "group": "base",
+          "icon": "home"
+        },
+        {
+          "id": "wp-24",
+          "name": "伪和平",
+          "x": 64,
+          "z": -3889,
+          "group": "default",
+          "icon": "pin",
+          "description": "我也不知道具体高度，需要问群友"
+        },
+        {
+          "id": "wp-25",
+          "name": "袭击塔",
+          "x": -753,
+          "z": -2042,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-26",
+          "name": "刷冰机",
+          "x": -4673,
+          "z": -3933,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-27",
+          "name": "八核刷铁机",
+          "x": 830,
+          "z": -960,
+          "group": "default",
+          "icon": "pin",
+          "description": "双维度"
+        },
+        {
+          "id": "wp-28",
+          "name": "蘑菇岛",
+          "x": 5627,
+          "z": 1884,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-29",
+          "name": "北岛 · 咲耶本宫",
+          "x": 1,
+          "y": 225,
+          "z": 3644,
+          "group": "group-3",
+          "icon": "🌸",
+          "description": "主宫与最大樱花神树所在，鸟居参道通往天岩户社。"
+        },
+        {
+          "id": "wp-30",
+          "name": "南岛 · 佐保姬花庭",
+          "x": -92,
+          "y": 225,
+          "z": 4076,
+          "group": "group-3",
+          "icon": "🌙",
+          "description": "春神花庭与夜樱茶庭，宜静赏与小祭。"
+        },
+        {
+          "id": "wp-31",
+          "name": "离岛 · 羽衣小岛",
+          "x": 591,
+          "y": 225,
+          "z": 3409,
+          "group": "group-3",
+          "icon": "🪶",
+          "description": "天女羽衣传说之地，孤祠、鸟居与羽衣岩守望云海。"
         }
       ]
     },
