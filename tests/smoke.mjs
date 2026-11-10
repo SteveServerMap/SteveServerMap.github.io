@@ -304,6 +304,7 @@ function LAYOUT() {
       : null,
     toggleUsable: Boolean(toggleRect && toggleRect.width > 0 && toggleRect.height > 0),
     sidebarDisplay: sidebar ? getComputedStyle(sidebar).display : null,
+    sidebarShadow: sidebar ? getComputedStyle(sidebar).boxShadow : null,
   };
 }
 
@@ -3391,6 +3392,12 @@ async function main() {
       await closeSidebarForTest();
       const closedState = await readNarrow();
       checkLayout(closedState, '侧栏收起时');
+      if (closedState.layout.sidebarShadow !== 'none') {
+        problems.push(
+          `侧栏收起时仍有投影（${closedState.layout.sidebarShadow}）：` +
+            '元素移出屏幕后阴影会漏在左缘形成暗影，只应在抽屉打开时出现',
+        );
+      }
       if (problems.length > 0) throw new Error(problems.join('；'));
 
       // ② 打开抽屉：移动端是 fixed 覆盖层，不应挤占地图
@@ -3403,6 +3410,9 @@ async function main() {
       }
       const openedState = await readNarrow();
       checkLayout(openedState, '抽屉打开时');
+      if (!openedState.layout.sidebarShadow || openedState.layout.sidebarShadow === 'none') {
+        problems.push('抽屉打开时侧栏缺少投影（阴影应只在打开态出现）');
+      }
       if (!openedState.layout.sidebar || !(openedState.layout.sidebar.width > 100)) {
         problems.push(
           `抽屉打开时侧栏宽度 ${openedState.layout.sidebar?.width ?? 0}px，期望 > 100px`,

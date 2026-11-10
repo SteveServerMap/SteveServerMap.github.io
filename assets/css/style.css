@@ -2126,17 +2126,18 @@ body[data-sidebar="collapsed"] .sidebar,
     width: min(86vw, var(--sidebar-w));
     max-width: 360px;
     border-right: 1px solid var(--border-strong);
-    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.55);
     transform: translateX(-100%);
     opacity: 1;
     visibility: visible;
     pointer-events: auto;
-    transition: transform 0.24s var(--ease);
+    transition: transform 0.24s var(--ease), box-shadow 0.24s var(--ease);
   }
 
+  /* 阴影只在抽屉打开时出现：收起后元素虽移出屏幕，投影仍会漏在左缘形成暗影 */
   body[data-sidebar="open"] .sidebar,
   .app[data-sidebar="open"] .sidebar {
     transform: translateX(0);
+    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.55);
   }
 
   /* 收起态：移动端只移动，不要 visibility:hidden（否则过渡会跳） */
