@@ -189,6 +189,7 @@ DOM：每个路径点生成
 定位用 `style.transform = translate3d(x px, y px, 0)`（外层 `.marker` 有 `position:absolute; left:0; top:0`，
 通过 `translate(-50%,-100%)` 让针尖对准坐标点）。视口外的标记加 `.is-offscreen`（`visibility:hidden`）。
 图标解析 `ICONS` 表（见 §6）。详情卡片由 markers.js 生成到 `#overlay` 内的 `.marker-popup`。
+详情卡的 `.popup-group` 只在有分组时显示；`group === 'default'`（未分组）时隐藏，标题下不再出现「未分组」。
 
 ---
 
@@ -238,12 +239,21 @@ sidebar.js 负责绑定它们。
 > 「全显 / 全隐」按钮移到了「列表」面板的标题栏。`#group-list` 与 `#panel-groups` 不再存在于 `index.html`，
 > `sidebar.js` 里相关代码路径仍保留（`this.el.groupList` 为空时自动跳过），便于将来需要时恢复。
 
+### 5.v 窄屏顶栏工具收纳（2026-11-13）
+
+- 断点与抽屉一致：`matchMedia('(max-width: 860px)')`。
+- `app.js` 的 `initResponsiveTools()` 在窄屏把 `#btn-skin`、`#btn-convert` 移入侧栏底脚
+  `#sidebar-tools`（`index.html` 里预留的空容器，桌面 `hidden`）；变宽后按原顺序移回
+  `.topbar-right`（`#btn-skin` 回到 `#btn-copy-link` 之前，`#btn-convert` 回到 `#btn-theme` 之前）。
+- 从抽屉里启动皮肤 / 换算面板时自动收起抽屉，避免遮罩盖住面板。
+- 移动用 `Element.append` / `Node.before`，节点不重建，事件绑定与无障碍属性保持不变。
+
 ### 5.x 侧栏路径点列表的分组折叠
 
 - `#waypoint-list` 的内容按「分组」分区渲染：每个分组一个 `section.wp-group[data-group]`，
   里面依次是 `div.wp-group-head`（箭头 + 色块 + 名称 + 数量 + 眼睛按钮）与 `div.wp-group-items`（组内路径点）。
 - 点分组头 = 折叠/展开（`is-collapsed`，`aria-expanded` 同步；折叠时组内节点仍在 DOM 里，只是 `display:none`）。
-- 分组头里的眼睛按钮 = 切换该分组显隐，与 `#group-list` 的分组面板联动（两处的 `aria-pressed` 保持一致）。
+- 分组头里的眼睛按钮 = 切换该分组显隐（`aria-pressed` 与按钮图标同步）；失效分组的路径点静默归入 `default`。
 - 折叠状态按「维度 + 分组」记在 `localStorage['ssm.collapsedGroups.v1']`（元素形如 `overworld::base`），刷新后保持。
 - 搜索（`#waypoint-search`）时强制展开所有分组，避免「搜到了却看不见」；清空搜索后恢复用户之前的折叠状态。
 - 分组顺序跟随 `config.json` 里 `dimensions[].groups` 的定义顺序，组内顺序跟随 `waypoints` 数组顺序。
@@ -261,7 +271,7 @@ sidebar.js 负责绑定它们。
 
 ### 5.z 滚轮 / 指针事件的忽略范围
 
-- **滚轮**：只有 `.marker-popup`、`.zoom-panel`、`.coord-readout`、`.map-hint`、`.scale-bar` 这些自身可能要滚动的 UI 会吞掉滚轮；
+- **滚轮**：只有 `.marker-popup`、`.zoom-panel`、`.coord-readout`、`.scale-bar` 这些自身可能要滚动的 UI 会吞掉滚轮；
   **鼠标停在路径点标记（`.marker` / `.marker-pin` / `.marker-label`）上时滚轮仍然缩放地图**（锚点为光标位置）。
 - **指针**：在路径点标记（`.marker` 及其内部元素）上按下也会开始跟踪——
   移动超过 4px 阈值即为拖拽平移（松手不选中标记）；未越阈值则视为点击，原地松手 = 选中并打开弹窗。
@@ -343,7 +353,7 @@ export class MeasureLayer {
 - 规范化后的维度对象：`{ id, name, image, tiles, calibration, groups, waypoints, order }`
   - `tiles` 为 `null`（未配置）或 `{ manifest: "tiles/overworld/manifest.json" }`（也接受直接写字符串）。
 - 规范化后的路径点：`{ id, name, x, y, z, group, icon, color, label, description, url }`
-  - `y` 可省略（null）；`group` 缺省落到 `default` 分组；`icon` 缺省 `pin`；`color` 缺省取分组色。
+  - `y` 可省略（null）；`group` 缺省或指向不存在的分组时静默落到 `default` 分组（不产生配置警告）；`icon` 缺省 `pin`；`color` 缺省取分组色。
 - `label`：`always` | `hover` | `never`（缺省跟随全局 `ui.labelMode`）。
 - 图标映射 `ICONS`（markers.js 与 sidebar.js 共用，写在 markers.js 里并 `export`）：
 
@@ -364,6 +374,9 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 - 必须包含 `[hidden] { display: none !important; }`
 - 深色主题（背景接近 `#0f1210`），强调色 Minecraft 草绿 `#5ad26f`。
 - 响应式断点：`max-width: 860px` 走抽屉模式，`#sidebar-backdrop` 显示。
+- 窄屏顶栏（2026-11-13）：`≤620px` 隐藏 `.brand`，`.dimension-switch` 不限宽、完整显示；
+  `≤420px` 用 `.dimension-switch > .dim-btn` 收紧按钮内边距。品牌隐藏后按钮全体只留图标，
+  皮肤 / 换算的位置由 `app.js` 决定（见 §5.v），桌面端规则不变。
 
 ---
 
@@ -373,7 +386,8 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
 2. 三个维度都能切换；缺图维度显示 `#map-state` 提示而不是崩溃。
 3. 路径点数量 = config 中该维度数量，且位置随缩放/平移正确跟随（误差 < 1px）。
 4. 侧栏点击路径点 → 视图居中该点；分组开关生效。
-6. 窄屏（390×844）下侧栏可开合，地图可用。
+6. 窄屏（390×844）下侧栏可开合，地图可用；360~620px 三个维度按钮完整可点；
+   皮肤 / 换算收进侧栏底脚，从抽屉启动后面板打开且抽屉收起；恢复桌面宽度后按钮回到顶栏原顺序。
 
 ## 9. 交互体检修正（2026-11-05）
 

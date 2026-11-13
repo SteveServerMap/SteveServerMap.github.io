@@ -1874,57 +1874,6 @@ body[data-sidebar="collapsed"] .sidebar,
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
-.map-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 14px;
-  z-index: 5;
-  max-width: min(64%, 520px);
-  padding: 6px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--glass-dim);
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  animation: hint-life 9s var(--ease) forwards;
-  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
-}
-
-@keyframes hint-life {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, 8px);
-  }
-  5% {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-  82% {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, 4px);
-  }
-}
-
-/* app.js 在首次交互后加 .is-hidden（淡出后不再遮挡） */
-.map-hint.is-hidden,
-.map-hint.is-fade {
-  animation: none;
-  opacity: 0;
-  transform: translate(-50%, 4px);
-  pointer-events: none;
-}
-
 /* ---------- 空状态 / 缺图 / 载入中 ---------- */
 .map-state {
   position: absolute;
@@ -2159,10 +2108,6 @@ body[data-sidebar="collapsed"] .sidebar,
     display: none;
   }
 
-  .map-hint {
-    display: none;
-  }
-
   .coord-readout {
     bottom: 10px;
     left: 10px;
@@ -2207,10 +2152,9 @@ body[data-sidebar="collapsed"] .sidebar,
     border-radius: 9px;
   }
 
-  /* 顶栏在窄屏必须能压缩：标题省略号 + 按钮只留图标 + 维度切换可横滚 */
+  /* 窄屏顶栏：隐藏品牌，按钮只留图标，维度切换完整显示（皮肤/换算由 JS 移入侧栏） */
   .brand {
-    flex: 0 1 auto;
-    min-width: 0;
+    display: none;
   }
 
   .brand-text {
@@ -2253,7 +2197,7 @@ body[data-sidebar="collapsed"] .sidebar,
   }
 
   .dimension-switch {
-    max-width: 42vw;
+    max-width: none;
     min-width: 0;
     flex: 0 1 auto;
   }
@@ -2309,7 +2253,14 @@ body[data-sidebar="collapsed"] .sidebar,
 
 @media (max-width: 420px) {
   .dimension-switch {
-    max-width: 38vw;
+    max-width: none;
+  }
+
+  /* 320px 级老机型：收紧维度按钮内边距，让三个维度仍完整可点
+     （生成的按钮带 .dim-btn，权重与基础规则相同，这里需一并列出） */
+  .dimension-switch > button,
+  .dimension-switch > .dim-btn {
+    padding: 0 7px;
   }
 
   .brand-title {
@@ -2324,10 +2275,6 @@ body[data-sidebar="collapsed"] .sidebar,
   .zoom-panel {
     padding: 4px;
     gap: 2px;
-  }
-
-  .map-hint {
-    display: none;
   }
 }
 
@@ -2348,11 +2295,6 @@ body[data-sidebar="collapsed"] .sidebar,
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-
-  .map-hint {
-    animation: none;
-    opacity: 1;
-  }
 }
 
 @media print {
@@ -2367,7 +2309,6 @@ body[data-sidebar="collapsed"] .sidebar,
   .sidebar,
   .sidebar-backdrop,
   .zoom-panel,
-  .map-hint,
   .coord-readout,
   .scale-bar,
   .toast,
@@ -2879,13 +2820,6 @@ body[data-sidebar="collapsed"] .sidebar,
 
 #skin-canvas:active {
   cursor: grabbing;
-}
-
-.skin-hint {
-  margin-top: 6px;
-  text-align: center;
-  color: var(--muted, #93a394);
-  font-size: 11px;
 }
 
 .skin-actions {

@@ -236,10 +236,8 @@ function normalizeWaypoints(rawWaypoints, groupIds, groups, warnings, dimName) {
     seen.add(id);
 
     let group = str(w.group);
-    if (group && !groupIds.has(group)) {
-      warnings.push(`路径点「${name}」引用了不存在的分组 "${group}"，已归入「未分组」`);
-      group = null;
-    }
+    // 分组不存在时静默归入「未分组」：共享来的坐标常常还没分组，不必为此打扰
+    if (group && !groupIds.has(group)) group = null;
     if (!group) {
       group = DEFAULT_GROUP.id;
       if (!groupIds.has(group)) {

@@ -129,6 +129,8 @@
             <svg class="icon" aria-hidden="true"><use href="#i-home"></use></svg><span>原点</span>
           </button>
         </div>
+        <!-- 窄屏顶栏放不下时，皮肤 / 换算会由 app.js 移到这里（桌面为空且隐藏） -->
+        <div id="sidebar-tools" class="foot-actions" hidden></div>
       </div>
     </aside>
 
@@ -164,7 +166,6 @@
         </div>
 
         <div id="coord-readout" class="coord-readout" hidden>X — Z —</div>
-        <div id="map-hint" class="map-hint">滚轮缩放 · 拖拽平移 · 点击路径点查看详情</div>
         <div id="scale-bar" class="scale-bar" hidden><span class="scale-bar-line"></span><span id="scale-bar-label">100 方块</span></div>
 
     <!-- 测量读数（测量模式下显示在左下角） -->
@@ -234,7 +235,6 @@
       <div class="skin-stage">
         <canvas id="skin-canvas" width="300" height="420" aria-label="皮肤 3D 预览（拖拽旋转，右键平移，滚轮缩放）"></canvas>
       </div>
-      <div class="skin-hint">拖拽旋转 · 右键平移 · 滚轮缩放</div>
       <div class="skin-actions" role="group" aria-label="皮肤动作">
         <button id="skin-act-walk" class="skin-act-btn" type="button" aria-pressed="false">走路</button>
         <button id="skin-act-run" class="skin-act-btn" type="button" aria-pressed="false">奔跑</button>

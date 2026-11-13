@@ -34,7 +34,6 @@ const IGNORE_SELECTOR = [
   '.convert-panel',
   '.skin-panel',
   '.coord-readout',
-  '.map-hint',
   '.scale-bar',
   '.map-state',
   '.modal',

@@ -26,7 +26,6 @@ const NODES = {
   count: 'waypoint-count',
   search: 'waypoint-search',
   searchClear: 'search-clear',
-  groupList: 'group-list',
   waypointList: 'waypoint-list',
   waypointEmpty: 'waypoint-empty',
   sidebarError: 'sidebar-error',

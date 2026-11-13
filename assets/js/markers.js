@@ -819,6 +819,7 @@ export class MarkerLayer {
       icon: popup.querySelector('.popup-icon'),
       title: popup.querySelector('.popup-title'),
       dot: popup.querySelector('.popup-dot'),
+      groupWrap: popup.querySelector('.popup-group'),
       group: popup.querySelector('.popup-group-name'),
       desc: popup.querySelector('.popup-desc'),
       coords: popup.querySelector('.popup-coords'),
@@ -852,6 +853,8 @@ export class MarkerLayer {
     parts.title.textContent = waypoint.name != null ? String(waypoint.name) : String(waypoint.id);
     parts.dot.style.background = color;
     parts.group.textContent = group ? group.name || group.id : String(waypoint.group || '默认');
+    // 未分组的点不显示「未分组」这一行
+    parts.groupWrap.hidden = String(waypoint.group || 'default') === 'default';
 
     const description = waypoint.description != null ? String(waypoint.description) : '';
     parts.desc.textContent = description;

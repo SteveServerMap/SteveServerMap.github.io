@@ -192,6 +192,8 @@ function MARKER_STATS(groupId) {
   return {
     total: all.length,
     shown: all.filter(isVisible).length,
+    // is-offscreen：最小缩放（0.02）下画幅高于视口时，边缘路径点会被主动裁掉（不算缺陷）
+    offscreen: all.filter((marker) => marker.classList.contains('is-offscreen')).length,
     groupTotal: scoped.length,
     groupShown: scoped.filter(isVisible).length,
     ids: all.map((marker) => marker.dataset.id || null),
@@ -553,7 +555,7 @@ async function ensureSidebarOpen() {
  * 滚轮 / 拖拽落在这些元素上时 viewer 会故意忽略，测试必须避开。
  */
 const IGNORED_HIT_SELECTOR =
-  '.marker, .marker-popup, .zoom-panel, .coord-readout, .map-hint, .scale-bar, .map-state, .modal';
+  '.marker, .marker-popup, .zoom-panel, .coord-readout, .scale-bar, .map-state, .modal';
 
 /**
  * 在视口内找一个安全的落点：elementFromPoint 必须真正命中底图元素
@@ -2062,6 +2064,66 @@ async function main() {
     return `点击「${target.text}」→ 偏差 ${distance.toFixed(1)}px`;
   });
 
+  await checkIfReady('popup.group-row', '详情卡：有分组的点显示分组名，未分组点不显示分组行', async () => {
+    await ensureSidebarOpen();
+    await page.evalFn(SET_INPUT, '#waypoint-search', '');
+    await resetView();
+    const dimension = dimensionById('overworld');
+    const grouped = dimension.waypoints.find((waypoint) => (waypoint.group || 'default') !== 'default');
+    const ungrouped = dimension.waypoints.find((waypoint) => (waypoint.group || 'default') === 'default');
+    if (!grouped) throw new Error('config 里没有已分组路径点，无法验证分组行');
+    if (!ungrouped) throw new Error('config 里没有未分组路径点，无法验证隐藏分组行');
+
+    const clickRow = async (waypoint) => {
+      const target = await page.evalFn((waypointId) => {
+        const el = document.querySelector(`#waypoint-list [data-id="${waypointId}"]`);
+        if (!el) return null;
+        el.scrollIntoView({ block: 'center' });
+        const rect = el.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      }, waypoint.id);
+      if (!target) throw new Error(`列表里找不到「${waypoint.name}」`);
+      await page.click(target.x, target.y);
+      await page
+        .waitFor(
+          (id) => {
+            const popup = document.querySelector('.marker-popup');
+            return !!popup && !popup.hidden && popup.dataset.id === id;
+          },
+          { timeout: WAIT.short, interval: 80, label: `详情卡打开「${waypoint.name}」`, args: [waypoint.id] },
+        )
+        .catch(() => {});
+      await page.settle(260);
+    };
+    const readPopup = () => page.evalFn(() => {
+      const popup = document.querySelector('.marker-popup');
+      if (!popup || popup.hidden) return null;
+      const row = popup.querySelector('.popup-group');
+      return {
+        id: popup.dataset.id,
+        rowHidden: !row || row.hidden,
+        text: (popup.querySelector('.popup-group-name')?.textContent || '').trim(),
+      };
+    });
+
+    await clickRow(grouped);
+    const groupedView = await readPopup();
+    if (!groupedView || groupedView.rowHidden || !groupedView.text) {
+      throw new Error(
+        `已分组点「${grouped.name}」详情卡应显示分组名：${JSON.stringify(groupedView)}`,
+      );
+    }
+
+    await clickRow(ungrouped);
+    const ungroupedView = await readPopup();
+    if (!ungroupedView || !ungroupedView.rowHidden) {
+      throw new Error(
+        `未分组点「${ungrouped.name}」详情卡不应显示分组行：${JSON.stringify(ungroupedView)}`,
+      );
+    }
+    return `「${grouped.name}」显示「${groupedView.text}」；「${ungrouped.name}」不显示分组行`;
+  });
+
   await checkIfReady('group.toggle', '分组眼睛按钮可隐藏/恢复该组标记', async () => {
     await ensureSidebarOpen();
     await resetView();
@@ -2196,9 +2258,14 @@ async function main() {
     }
 
     // ③ 全隐 / 全显
+    // 注：整图视图受最小缩放（0.02）限制，画幅可能高于视口，少量贴边路径点会被 .is-offscreen 裁掉；
+    // 这里把「视口外」计入合法不可见，只要求其余标记全部可见。
     const statsBefore = await page.evalFn(MARKER_STATS, null);
-    if (!statsBefore || statsBefore.shown !== total) {
-      throw new Error(`全隐前可见标记 ${statsBefore?.shown ?? '?'} 个，期望 ${total} 个（整图视图下应全部可见）`);
+    if (!statsBefore || statsBefore.shown + statsBefore.offscreen !== total) {
+      throw new Error(
+        `全隐前可见标记 ${statsBefore?.shown ?? '?'} 个、视口外 ${statsBefore?.offscreen ?? '?'} 个，` +
+          `合计期望 ${total} 个（整图视图下除视口外应全部可见）`,
+      );
     }
     await page.clickSelector('#btn-all-hidden');
     await page.settle(320);
@@ -2214,8 +2281,10 @@ async function main() {
     await page.settle(320);
     const shownStats = await page.evalFn(MARKER_STATS, null);
     const shownBadge = await page.evalFn(() => (document.querySelector('#waypoint-count')?.textContent || '').trim());
-    if (shownStats?.shown !== total) {
-      throw new Error(`#btn-all-visible 后可见标记 ${shownStats?.shown ?? '?'} 个，期望 ${total} 个`);
+    if (shownStats?.shown !== statsBefore.shown) {
+      throw new Error(
+        `#btn-all-visible 后可见标记 ${shownStats?.shown ?? '?'} 个，期望恢复为 ${statsBefore.shown} 个`,
+      );
     }
     if (shownBadge !== `${total}/${total}`) {
       throw new Error(`#btn-all-visible 后 #waypoint-count=「${shownBadge}」，期望「${total}/${total}」`);
@@ -2224,7 +2293,7 @@ async function main() {
     return (
       `网格 ${gridBefore.pressed}/opacity ${gridBefore.opacity} → ${gridOn.pressed}/1 → ${gridOff.pressed}/0；` +
       `标签 ${labelsBefore} → ${labelSequence.join(' → ')}；` +
-      `全隐 0/${total} → 全显 ${total}/${total}`
+      `全隐 0/${total} → 全显 ${shownStats.shown}/${total}（视口外 ${statsBefore.offscreen}）`
     );
   });
 
@@ -3441,6 +3510,149 @@ async function main() {
         `${closedAgainState.layout.viewport.width.toFixed(0)}px；` +
         `body[data-sidebar] ${closedState.layout.bodySidebar} → ${openedState.layout.bodySidebar} → ${closedAgainState.layout.bodySidebar}`
       );
+    },
+  );
+
+  // 窄屏顶栏空间不足：维度切换必须完整可点；皮肤/换算收进侧栏抽屉，桌面恢复原位
+  await checkIfReady(
+    'narrow.toolbar',
+    '窄屏三个维度按钮完整可点；皮肤/换算收进侧栏（启动即收起抽屉）；桌面恢复原位',
+    async () => {
+      const readDims = () => page.evalFn(() => {
+        const sw = document.querySelector('#dimension-switch');
+        if (!sw) return null;
+        const box = sw.getBoundingClientRect();
+        return [...sw.querySelectorAll('button')].map((b) => {
+          const r = b.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return {
+            text: (b.textContent || '').trim(),
+            full:
+              r.width > 0 &&
+              r.left >= box.left - 1 && r.right <= box.right + 1 &&
+              r.top >= box.top - 1 && r.bottom <= box.bottom + 1,
+            hitSelf: !!(hit && (hit === b || b.contains(hit))),
+          };
+        });
+      });
+
+      const clickDim = async (label) => {
+        const pt = await page.evalFn((text) => {
+          const b = [...document.querySelectorAll('#dimension-switch button')]
+            .find((el) => (el.textContent || '').trim() === text);
+          if (!b) return null;
+          const r = b.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }, label);
+        if (!pt) throw new Error(`找不到维度按钮「${label}」`);
+        await page.click(pt.x, pt.y);
+        await page.settle(420);
+        return page.evalFn(() => document.body.dataset.dimension);
+      };
+
+      await page.setViewport({ width: 390, height: 844, mobile: false });
+      await page.settle(320);
+      await closeSidebarForTest();
+
+      const dims390 = await readDims();
+      if (!dims390 || dims390.length !== 3) {
+        throw new Error(`390px 维度按钮 ${dims390?.length ?? 0} 个，期望 3`);
+      }
+      const clipped = dims390.filter((b) => !b.full || !b.hitSelf);
+      if (clipped.length) {
+        throw new Error(
+          `390px 维度按钮不完整/不可点：${clipped
+            .map((b) => `${b.text}(完整=${b.full},命中=${b.hitSelf})`)
+            .join('、')}（疑似被窄屏顶栏挤压，见 narrow.toolbar 说明）`,
+        );
+      }
+
+      const dimBefore = await page.evalFn(() => document.body.dataset.dimension);
+      const other = dimBefore === 'the_end' ? '主世界' : '末地';
+      const dimSwitched = await clickDim(other);
+      if (dimSwitched === dimBefore) throw new Error(`真实点击「${other}」后维度仍是 ${dimBefore}`);
+      await clickDim('主世界');
+
+      const placement = await page.evalFn(() => ({
+        toolsHidden: document.querySelector('#sidebar-tools')?.hidden !== false,
+        skinParent: document.querySelector('#btn-skin')?.parentElement?.id || '',
+        convertParent: document.querySelector('#btn-convert')?.parentElement?.id || '',
+      }));
+      if (placement.toolsHidden || placement.skinParent !== 'sidebar-tools' || placement.convertParent !== 'sidebar-tools') {
+        throw new Error(`390px 皮肤/换算未收进侧栏：${JSON.stringify(placement)}`);
+      }
+
+      await openSidebarForTest();
+      const tools = await page.evalFn(() =>
+        ['btn-skin', 'btn-convert'].map((id) => {
+          const b = document.getElementById(id);
+          const r = b.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return {
+            id,
+            visible: r.width > 0 && r.height > 0,
+            hitSelf: !!(hit && (hit === b || b.contains(hit))),
+          };
+        }),
+      );
+      const deadTools = tools.filter((t) => !t.visible || !t.hitSelf);
+      if (deadTools.length) throw new Error(`侧栏工具不可点：${deadTools.map((t) => t.id).join('、')}`);
+
+      const skinPt = await page.evalFn(() => {
+        const r = document.getElementById('btn-skin').getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
+      await page.click(skinPt.x, skinPt.y);
+      await page.settle(420);
+      const launched = await page.evalFn(() => ({
+        drawer: document.body.dataset.sidebar,
+        skinOpen: !document.querySelector('#skin-panel')?.hidden,
+      }));
+      if (launched.drawer !== 'collapsed' || !launched.skinOpen) {
+        throw new Error(
+          `从抽屉启动皮肤后：抽屉=${launched.drawer}，面板=${launched.skinOpen ? '开' : '关'}` +
+            '（期望抽屉收起且面板打开，避免抽屉盖住面板）',
+        );
+      }
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await page.settle(320);
+
+      await page.setViewport({ width: 360, height: 844, mobile: false });
+      await page.settle(320);
+      const dims360 = await readDims();
+      const clipped360 = (dims360 || []).filter((b) => !b.full || !b.hitSelf);
+      if (!dims360 || dims360.length !== 3 || clipped360.length) {
+        throw new Error(
+          `360px 维度按钮不完整/不可点：${clipped360.map((b) => b.text).join('、') || `数量 ${dims360?.length ?? 0}`}`,
+        );
+      }
+
+      await page.setViewport({ ...VIEWPORT });
+      await page.settle(420);
+      const desktop = await page.evalFn(() => {
+        const skin = document.querySelector('#btn-skin');
+        const span = skin ? skin.querySelector('span') : null;
+        return {
+          toolsHidden: document.querySelector('#sidebar-tools')?.hidden !== false,
+          skinParent: skin?.parentElement?.className || '',
+          convertParent: document.querySelector('#btn-convert')?.parentElement?.className || '',
+          labelDisplay: span ? getComputedStyle(span).display : 'none',
+          order: [...document.querySelectorAll('.topbar-right > .btn')].map((b) => b.id),
+        };
+      });
+      const expectedOrder = ['btn-measure', 'btn-skin', 'btn-copy-link', 'btn-convert', 'btn-theme'];
+      if (
+        !desktop.toolsHidden ||
+        !desktop.skinParent.includes('topbar-right') ||
+        !desktop.convertParent.includes('topbar-right') ||
+        desktop.labelDisplay === 'none' ||
+        desktop.order.join(',') !== expectedOrder.join(',')
+      ) {
+        throw new Error(`桌面未恢复原样：${JSON.stringify(desktop)}`);
+      }
+
+      return `390/360px 三维度完整可点；皮肤/换算在侧栏（启动后面板打开、抽屉收起）；桌面恢复 ${desktop.order.join(' / ')}`;
     },
   );
 

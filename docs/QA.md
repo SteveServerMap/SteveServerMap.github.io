@@ -2,6 +2,54 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 移动端顶栏维度切换被挤压（2026-11-13）
+
+- 现象：≤420px（含 390px）时顶栏同时容纳「品牌 + 维度切换 + 5 个图标按钮」，维度按钮被压缩到截断，
+  点击命中的是相邻按钮，维度切不动。
+- 修复：
+  - `assets/css/style.css`：≤620px 隐藏品牌；`.dimension-switch` 取消 `42vw / 38vw` 上限，改为可完整显示；
+    ≤420px 收紧维度按钮内边距（`.dimension-switch > .dim-btn`，兼顾生成的按钮与基础按钮规则同权重）。
+  - `assets/js/app.js`：新增 `initResponsiveTools()`，`≤860px`（与抽屉断点一致）把「皮肤 / 换算」移入侧栏底脚
+    `#sidebar-tools`，从抽屉启动面板时自动收起抽屉；变宽后按原顺序移回 `.topbar-right`（桌面 DOM 与样式零变化）。
+  - `index.html`：侧栏底脚新增空的 `<div id="sidebar-tools" hidden>`。
+- 回归：新增 `narrow.toolbar`——390 / 360px 三个维度按钮完整且在自身命中区（`elementFromPoint`）、真实鼠标点击可切维度；
+  皮肤 / 换算在侧栏可点、启动后抽屉收起且面板打开；恢复 1440px 后工具按钮回到 `.topbar-right` 原顺序。
+- 顺带：`ui.toggles` 的全隐 / 全显基线改为「可见 + 视口外（`.is-offscreen`）= 总数」——
+  整图受最小缩放（0.02）限制时画幅可能高于视口，贴边路径点被裁掉属预期（新增 config 的 wp-32 / wp-34 即如此），
+  全显只要求恢复到原基线，不再假定所有路径点都能同时入镜。
+- 回归结果：单测 **75/75**、`static-checks.mjs` **30/30**、`smoke.mjs` **42 通过 / 0 失败 / 0 跳过**（44.0 s）。
+
+## 提示精简（2026-11-13）
+
+按「共享来的坐标点还没分组/还没去过是常态」的定位，删掉几处多余提示：
+
+- **未分组静默回落**：站点 `config.js` 与配置工具 `model.js` 不再为「未指定分组 / 分组不存在 → 归入未分组」
+  产生警告；归一化行为不变（仍补 `default` 分组并归入）。
+- **详情卡分组行**：`markers.js` 对 `group === 'default'`（未分组）的路径点隐藏 `.popup-group`，
+  有分组的点仍显示色点 + 分组名。回归项 `popup.group-row`（真实点击列表项验证两种点）。
+- **皮肤面板说明**：删除面板底部「拖拽旋转 · 右键平移 · 滚轮缩放」行及首次打开时的长 toast，
+  交互本身不变（canvas 的 `aria-label` 仍保留操作说明）。
+- **控制台残留警告**：`sidebar.js` 的 `NODES` 表移除已删面板的 `group-list`，页面加载不再出现
+  「找不到节点 #group-list」；`_renderGroups()` 等兼容代码保留（拿不到节点即跳过）。
+- 保留：测距读数面板内的操作提示行、侧栏「未分组」分区标题、配置工具分组下拉的「（未分组 · 默认）」。
+- 回归结果：配置工具 **108/108**、站点单测 **75/75**、`static-checks.mjs` **30/30**、
+  `smoke.mjs` **42 通过 / 0 失败 / 0 跳过**（44.0 s）。
+
+### 第二轮：教学式与状态确认提示（2026-11-13）
+
+只删「教怎么用」和「复述当前状态」的提示，快捷键提示保留：
+
+- **教学式提示**：
+  - 换算面板打开时的 toast（「开放换算…已预填视野中心」）——按钮的 `title` / `aria-pressed` 已足够。
+  - 测距开启时的长 toast——面板内提示行仍在，读数面板本身就是反馈。
+  - 地图底部 `#map-hint`「滚轮缩放 · 拖拽平移 · 点击路径点查看详情」整条删除（节点、淡出逻辑、
+    `hint-life` 动画、各断点与打印样式、viewer / smoke 的忽略选择器一并清理）。
+- **状态确认 toast**：网格开关、标签模式切换、全部分组显示/隐藏。
+- **保留**：G / L 首次按下的 `hintOnce` 快捷键提示（`ssm.hints.v1` 只提示一次）。
+- 机制不变：`toast()` 仍是单参数、默认 2600ms（调用方传的 tone/duration 本就被忽略）。
+- 回归结果：站点单测 **75/75**、`static-checks.mjs` **30/30**、
+  `smoke.mjs` **42 通过 / 0 失败 / 0 跳过**（43.6 s）。
+
 ## 移动端侧栏收起态左缘暗影（2026-11-10）
 
 - 现象：≤860px 时侧栏收起后，地图左缘仍有一条黑色渐变暗影。
@@ -500,6 +548,7 @@ node --test tests/coords.test.mjs
 | `sidebar.search` | 搜索「农场」列表项 10 → 2，清空后恢复 10；有结果时 `#waypoint-empty` 隐藏 |
 | `sidebar.empty` | 搜索无结果时列表 0 项且 `#waypoint-empty` 可见 |
 | `sidebar.click` | 点击列表项后该标记锚点距视口中心 < 40px |
+| `popup.group-row` | 查看详情卡：已分组点显示分组名（如「据点」），未分组点不显示 `.popup-group` 行 |
 | `group.toggle` | 分组眼睛按钮隐藏后该组可见标记 2 → 0，再点恢复 2 |
 | `ui.toggles` | 网格：点一次 `aria-pressed=true` 且 `.map-grid` `opacity=1`，再点回 `false`/0（一次点击只切换一次，验证无重复绑定）；标签：连点三次 `body[data-labels]` 依次 hover → always → never → hover；全隐：可见标记 0 且 `#waypoint-count=0/10`，全显恢复 10/10 |
 | `deep-link` | `focusWaypoint('castle')` 后 `location.hash` 同步出 `dim/x/z/s`（x/z 与 castle 相差 < 5 方块）；用该 hash 打开**新标签页**：`body[data-dimension]` 正确、视图中心世界坐标与 hash 相差 < 5 方块、无 console error |
@@ -518,6 +567,7 @@ node --test tests/coords.test.mjs
 | `convert.oob` | 定位到画幅外坐标时提示且不移动视野 |
 | `skin.panel` | 皮肤预览：真实点击开合与互斥、非法 ID 本地报错（离线安全）、DataTransfer 导入 64×64 与旧版 64×32 PNG（自动补全）、3D 查看器就绪、默认静止、走路/奔跑/静止真实点击切换、旋转开关与左键拖拽停转复位、右键平移相机且不穿透地图、Esc 关闭复位、无 console error |
 | `narrow.layout` | `Emulation.setDeviceMetricsOverride(390×844)` 下：`#viewport` 宽 ≈ `window.innerWidth`（±1）、`document.scrollingElement.scrollWidth ≤ innerWidth+1`（无横向溢出）；抽屉打开时（fixed 覆盖层）地图宽度同样 == innerWidth；收起后布局恢复 |
+| `narrow.toolbar` | 390 / 360px：三个维度按钮矩形完整落在 `#dimension-switch` 内且 `elementFromPoint` 命中自身，真实鼠标点击能切维度；皮肤 / 换算收进 `#sidebar-tools`，从侧栏启动皮肤后抽屉收起、面板打开；恢复 1440px 后回 `.topbar-right` 且顺序为 measure / skin / copy-link / convert / theme |
 | `narrow.transition` | 桌面收起侧栏后把窗口缩到 390px，`#viewport` 不被压成 0（回归：曾被桌面端多列 grid 规则泄漏到移动断点压成 0px） |
 | `theme.toggle` | 主题真实点击切换、localStorage 持久化、系统偏好跟随 |
 | `run.console` | 全流程无 console error / 未捕获异常 / 未处理 Promise 拒绝 |
@@ -536,6 +586,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
+| 2026-11-13（Asia/Shanghai） | Node v24.18.0 / Windows x64 / 本地服务 | **单测 75 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 42 通过 / 0 失败 / 0 跳过（44.0 s；新增 narrow.toolbar / popup.group-row，ui.toggles 容忍视口外标记）** |
 | 2026-11-10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 78 通过 / 0 失败（含 skin.test.mjs 7 项）；static-checks 30 通过 / 0 失败；smoke 38 通过 / 1 失败（36.2 s；新增 skin.panel 通过，唯一失败为已知数据耦合项 ui.toggles 29/31，见「玩家皮肤 3D 预览」章节）** |
 | 2026-11-07（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 71 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.5 s）；probe-freeze 探针通过（静止外扩窗口、拖动全程零重画、松手零变化、位移与鼠标一致、拖动锐利）** |
 | 2026-11-06 14:10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 69 通过 / 0 失败（`node --test tests/*.test.mjs`）；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.4 s）** |
@@ -600,5 +651,5 @@ node --test tests/coords.test.mjs
 - 新增断言统一用 `createReporter().check(id, label, fn)`，失败文案必须包含「实际值 vs 期望值」与可点击的元素/选择器线索。
 - 测试只读站点文件；发现站点问题请报告 Lead，不要直接修改 `index.html` / `assets/**` / `config.json`。
 - 页面里取坐标一律用 `getBoundingClientRect()`（client 坐标），CDP `Input.dispatchMouseEvent` 也使用同一坐标系。
-- 滚轮 / 拖拽落点必须用 `elementFromPoint` 确认命中 `#map-image`：`.marker`、`.marker-popup`、`.zoom-panel`、`.coord-readout`、`.map-hint`、`.scale-bar`、`.map-state`、`.modal` 上的事件会被 MapView 有意忽略。
+- 滚轮 / 拖拽落点必须用 `elementFromPoint` 确认命中 `#map-image`：`.marker`、`.marker-popup`、`.zoom-panel`、`.coord-readout`、`.scale-bar`、`.map-state`、`.modal` 上的事件会被 MapView 有意忽略。
 - 每次运行后如需人工看效果：打开 `tests/artifacts/ok-desktop.png`、`ok-narrow.png`；失败时看 `error-*.png` 与 `report.json`。

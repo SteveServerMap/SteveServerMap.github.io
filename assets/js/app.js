@@ -109,6 +109,7 @@ async function bootstrap() {
     initConverter();
     initSkinPanel();
     initTheme();
+    initResponsiveTools();
 
     const hash = readHash();
     const startDim = hash.dim || config.defaultDimension;
@@ -216,15 +217,6 @@ function initViewer() {
   bindClick('measure-clear', () => clearMeasure());
   bindClick('measure-exit', () => setMeasureActive(false));
 
-  // 首次交互后淡出操作提示
-  const hint = $('map-hint');
-  const dismissHint = () => {
-    if (hint) hint.classList.add('is-hidden');
-    viewport.removeEventListener('pointerdown', dismissHint);
-    viewport.removeEventListener('wheel', dismissHint);
-  };
-  viewport.addEventListener('pointerdown', dismissHint);
-  viewport.addEventListener('wheel', dismissHint, { passive: true });
   // 用户一操作视角就"武装" hash 同步（在此之前不动地址栏）
   viewport.addEventListener('pointerdown', armHashSync, { passive: true });
   // 测距模式下按住 Shift 点路径点 = 看详情（不新增测量点）
@@ -676,9 +668,7 @@ function setAllGroupsVisible(visible) {
   }
   tryCall(markers, 'update');
   pushDataToSidebar();
-  toast(visible ? '已显示全部分组' : '已隐藏全部分组');
 }
-
 
 /* ============================== 测距 ============================== */
 
@@ -732,14 +722,6 @@ function initConverter() {
       } : {});
       btn.setAttribute('aria-pressed', next ? 'true' : 'false');
       btn.classList.toggle('is-active', next);
-      if (next) {
-        toast(
-          prefillable
-            ? '换算：主世界 ÷8 ↔ 下界 ×8，打开时已预填当前视野中心'
-            : '换算：主世界 ÷8 ↔ 下界 ×8（当前维度不参与换算，未预填）',
-          'info', 3200,
-        );
-      }
     });
   }
 }
@@ -771,9 +753,6 @@ function initSkinPanel() {
         }
       }
       skinPanel.setOpen(next);
-      if (next) {
-        toast('皮肤预览：输入正版 ID 查询（自动按 UUID 从皮肤源加载），或导入本地皮肤 PNG（64×64 / 128×128，旧版 64×32 / 128×64 也可）；拖拽旋转，右键平移，滚轮缩放，「回正」复位视角', 'info', 3600);
-      }
     });
   }
 }
@@ -807,9 +786,6 @@ function setMeasureActive(active) {
   // 退出 = 收起面板；已有的测量线/点保留在图上，再点「测距」可继续编辑
   if (panel) panel.hidden = !state.measureActive;
   document.body.classList.toggle('is-measuring', state.measureActive);
-  if (state.measureActive) {
-    toast('测距已开启：点地图加测量点（点路径点会吸附）· Shift+点路径点看详情 · Backspace 撤销 · Enter/Esc 结束（点会保留）', 'ok', 4600);
-  }
   updateMeasureReadout();
 }
 
@@ -1151,7 +1127,6 @@ function cycleLabelMode() {
   document.body.dataset.labels = next;
   tryCall(markers, 'setLabelMode', next);
   tryCall(markers, 'update');
-  toast({ hover: '标签：悬停显示', always: '标签：始终显示', never: '标签：全部隐藏' }[next]);
 }
 
 function toggleGrid() {
@@ -1161,7 +1136,6 @@ function toggleGrid() {
   if (btn) btn.setAttribute('aria-pressed', state.grid ? 'true' : 'false');
   if (gridCanvas) gridCanvas.style.opacity = state.grid ? '1' : '0';
   if (state.grid) drawGrid(safeViewState());
-  toast(state.grid ? '已显示坐标网格' : '已隐藏坐标网格');
 }
 
 const GRID_STEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
@@ -1494,6 +1468,39 @@ function initTheme() {
       if (!saved) apply(event.matches === true, false);
     });
   }
+}
+
+/* ============================== 窄屏工具收纳 ============================== */
+
+/* 抽屉模式下顶栏放不下「维度切换 + 5 个按钮」：把皮肤 / 换算移进侧栏底脚，
+   变宽再移回原位（桌面 DOM 顺序、样式完全不变）。从抽屉启动工具时顺手收起抽屉。 */
+function initResponsiveTools() {
+  const tools = $('sidebar-tools');
+  const skinBtn = $('btn-skin');
+  const convertBtn = $('btn-convert');
+  const copyBtn = $('btn-copy-link');
+  const themeBtn = $('btn-theme');
+  if (!tools || !skinBtn || !convertBtn || !copyBtn || !themeBtn) return;
+  // 与抽屉断点保持一致（≤860px 都是抽屉模式）
+  const narrow = window.matchMedia('(max-width: 860px)');
+  const apply = () => {
+    if (narrow.matches) {
+      if (skinBtn.parentElement !== tools) tools.append(skinBtn);
+      if (convertBtn.parentElement !== tools) tools.append(convertBtn);
+    } else {
+      if (skinBtn.parentElement === tools) copyBtn.before(skinBtn);
+      if (convertBtn.parentElement === tools) themeBtn.before(convertBtn);
+    }
+    tools.hidden = !narrow.matches;
+  };
+  apply();
+  if (typeof narrow.addEventListener === 'function') narrow.addEventListener('change', apply);
+  else if (typeof narrow.addListener === 'function') narrow.addListener(apply);
+
+  tools.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest('button')) return;
+    if (sidebar && typeof sidebar.setCollapsed === 'function') sidebar.setCollapsed(true);
+  });
 }
 
 /* ============================== 事件绑定 ============================== */
