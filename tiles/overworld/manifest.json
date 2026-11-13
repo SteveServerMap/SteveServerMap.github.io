@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-09T18:00:21.452Z",
+  "generatedAt": "2026-11-13T12:27:11.109Z",
   "tileSize": 256,
   "source": "xaero-folder",
   "levels": [
@@ -120,12 +120,12 @@
   },
   "stats": {
     "kind": "png",
-    "images": 154,
+    "images": 156,
     "regions": 0,
-    "decoded": 154,
+    "decoded": 156,
     "skipped": 0,
-    "pixels": 161480704,
+    "pixels": 163577856,
     "level0Tiles": 36800,
-    "tilesWritten": 2810
+    "tilesWritten": 2821
   }
 }

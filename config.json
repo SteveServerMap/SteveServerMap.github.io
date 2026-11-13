@@ -280,7 +280,7 @@
           "name": "八核刷铁机",
           "x": 830,
           "z": -960,
-          "group": "default",
+          "group": "group",
           "icon": "pin",
           "description": "双维度"
         },
@@ -321,6 +321,30 @@
           "group": "group-3",
           "icon": "🪶",
           "description": "天女羽衣传说之地，孤祠、鸟居与羽衣岩守望云海。"
+        },
+        {
+          "id": "wp-32",
+          "name": "凋灵骷髅塔收集",
+          "x": -13101,
+          "z": -7981,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-33",
+          "name": "火药塔",
+          "x": -642,
+          "z": -2307,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-34",
+          "name": "甘蔗机",
+          "x": -1077,
+          "z": -8799,
+          "group": "default",
+          "icon": "pin"
         }
       ]
     },
@@ -344,7 +368,7 @@
         {
           "id": "default",
           "name": "未分组",
-          "color": "#59a6ff",
+          "color": "#5ad26f",
           "visible": true
         }
       ],
@@ -374,7 +398,40 @@
           "visible": true
         }
       ],
-      "waypoints": []
+      "waypoints": [
+        {
+          "id": "wp",
+          "name": "凋零玫瑰塔",
+          "x": -1058,
+          "z": -15,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-2",
+          "name": "小黑塔",
+          "x": 318,
+          "z": 3,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-3",
+          "name": "甘蔗机",
+          "x": 9,
+          "z": -239,
+          "group": "default",
+          "icon": "pin"
+        },
+        {
+          "id": "wp-4",
+          "name": "小黑塔",
+          "x": -262,
+          "z": 4,
+          "group": "default",
+          "icon": "pin"
+        }
+      ]
     }
   ]
 }
