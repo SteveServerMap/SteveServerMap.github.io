@@ -345,6 +345,14 @@
           "z": -8799,
           "group": "default",
           "icon": "pin"
+        },
+        {
+          "id": "wp-35",
+          "name": "刷石机",
+          "x": -185,
+          "z": -120,
+          "group": "default",
+          "icon": "pin"
         }
       ]
     },
