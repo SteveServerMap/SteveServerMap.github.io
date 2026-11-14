@@ -206,8 +206,7 @@
           "x": 630,
           "z": -1135,
           "group": "default",
-          "icon": "pin",
-          "description": "好像坏了，雪人被服务器扫掉了"
+          "icon": "pin"
         },
         {
           "id": "wp-19",
