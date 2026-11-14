@@ -2,8 +2,8 @@
  * assets/js/skin.js —— 玩家皮肤 3D 预览
  * =============================================================================
  * 皮肤查看器基于 skinview3d 3.4.2（assets/vendor/skinview3d.bundle.js，UMD 自包含
- * three.js + skinview-utils，挂全局 window.skinview3d，由 index.html 普通 <script>
- * 先于 module 引入）。正版 ID 查询先经 playerdb 把名称解析为 UUID，再按 UUID 取皮肤
+ * three.js + skinview-utils，挂全局 window.skinview3d）。该库 477KB，只有打开皮肤面板
+ * 才会用到，因此改为首次打开面板时由 loadSkinViewerLib() 动态注入，首屏不再下载。正版 ID 查询先经 playerdb 把名称解析为 UUID，再按 UUID 取皮肤
  * （名称直查会命中第三方名称缓存——实测 minotar 同名返回的是旧持有者的旧版皮肤），
  * 皮肤源按序回退：mineatar（24h TTL，可达源中最勤）→ mc-heads（可能被 Cloudflare 403）
  * → minotar → playerdb 携带的 Mojang 官方纹理直链（textures.minecraft.net 带 ACAO:*）。
@@ -118,6 +118,48 @@ export function padLegacySkin(source) {
 }
 
 /**
+ * 按需加载 skinview3d：并发调用共用一个 Promise；失败后清空，下一次可重试。
+ * 成功返回挂载在 window.skinview3d 的库对象。
+ * @param {{timeout?: number}} [options]
+ */
+let skinLibPromise = null;
+export function loadSkinViewerLib({ timeout = 20000 } = {}) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return Promise.reject(new Error('当前环境没有 window，无法加载 3D 库'));
+  }
+  if (window.skinview3d && typeof window.skinview3d.SkinViewer === 'function') {
+    return Promise.resolve(window.skinview3d);
+  }
+  if (skinLibPromise) return skinLibPromise;
+  skinLibPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        skinLibPromise = null; // 允许下次重试
+        script.remove();
+        reject(error);
+      } else {
+        resolve(window.skinview3d);
+      }
+    };
+    const timer = setTimeout(() => finish(new Error('3D 查看器加载超时')), timeout);
+    script.src = new URL('../vendor/skinview3d.bundle.js', import.meta.url).href;
+    script.async = true;
+    script.onload = () => {
+      if (window.skinview3d && typeof window.skinview3d.SkinViewer === 'function') finish(null);
+      else finish(new Error('3D 查看器脚本已加载但未挂载 skinview3d'));
+    };
+    script.onerror = () => finish(new Error('3D 查看器脚本加载失败'));
+    document.head.appendChild(script);
+  });
+  return skinLibPromise;
+}
+
+/**
  * 皮肤预览面板：只操作 index.html 里既有的 #skin-panel 节点，
  * 节点缺失时只 console.warn（与 sidebar.js 的容错策略一致）。
  */
@@ -179,6 +221,7 @@ export class SkinPanel {
     this._open = open === true;
     if (this.root) this.root.hidden = !this._open;
     if (!this._open) this._token++;
+    else loadSkinViewerLib().catch(() => {}); // 打开即预热，等用户选皮肤时库多半已就绪
     this._emitOpenChange();
   }
 
@@ -338,7 +381,7 @@ export class SkinPanel {
     if (!canvas) return null;
     const lib = typeof window !== 'undefined' ? window.skinview3d : null;
     if (!lib || typeof lib.SkinViewer !== 'function') {
-      this._setStatus('3D 查看器未加载（vendor 脚本缺失），请刷新页面重试', 'error');
+      this._setStatus('3D 查看器未就绪（vendor 脚本未加载），请重试', 'error');
       return null;
     }
     try {
@@ -367,7 +410,14 @@ export class SkinPanel {
   }
 
   /** 把已解码图片喂给查看器（旧版 64×32 / 128×64 先补全为正方形）。成功返回 true。 */
-  _renderSkin(img) {
+  async _renderSkin(img) {
+    try {
+      await loadSkinViewerLib();
+    } catch (error) {
+      console.warn('[skin] 3D 库加载失败', error);
+      this._setStatus(`${error.message}，请检查网络后重试`, 'error');
+      return false;
+    }
     const viewer = this._getViewer();
     if (!viewer) return false;
     let source = img;
@@ -396,7 +446,7 @@ export class SkinPanel {
   }
 
   /** 尺寸校验 + 渲染 + 状态行（ID 查询与文件导入共用） */
-  _applyLoaded(img, label, sourceName = '') {
+  async _applyLoaded(img, label, sourceName = '') {
     const w = img.naturalWidth || img.width || 0;
     const h = img.naturalHeight || img.height || 0;
     if (!isSkinSize(w, h)) {
@@ -407,7 +457,7 @@ export class SkinPanel {
       return;
     }
     const legacy = w === h * 2;
-    if (this._renderSkin(img)) {
+    if (await this._renderSkin(img)) {
       const source = sourceName ? `（来源 ${sourceName}）` : '';
       this._setStatus(
         `${label}：${w}×${h}${legacy ? `（旧版，已补全为 ${w}×${w}）` : ''}${source}`,
@@ -495,7 +545,7 @@ export class SkinPanel {
       const img = await this._loadImage(source.url, token, SKIN_FETCH_TIMEOUT);
       if (token !== this._token) return; // 面板已关 / 新查询已开始
       if (!img) continue;
-      this._applyLoaded(img, id, source.name);
+      await this._applyLoaded(img, id, source.name);
       return;
     }
     if (token === this._token) {
@@ -522,7 +572,11 @@ export class SkinPanel {
       if (token !== this._token) return;
       const img = new Image();
       img.onload = () => {
-        if (token === this._token) this._applyLoaded(img, file.name);
+        if (token === this._token) {
+          this._applyLoaded(img, file.name).catch((error) => {
+            console.warn('[skin] 皮肤渲染失败', error);
+          });
+        }
       };
       img.onerror = () => {
         if (token === this._token) this._setStatus(`图片解析失败：${file.name}`, 'error');

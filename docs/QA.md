@@ -2,6 +2,23 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 首屏加载优化（2026-11-14）
+
+- 背景：实测线上首访（桌面 1440×900、禁缓存）到「地图 + 标记就绪」1.5–2.3 s、传输 1.94 MB，
+  主要卡在：`skinview3d.bundle.js`（118 KB 压缩 / 477 KB 原文）作为阻塞 `<script>` 排在 `app.js` 前；
+  `app.js` 的静态 import 要等它下载后才发现（多一次往返）；`config.json` 与 manifest 在 JS 启动后串行 fetch。
+- 改动：
+  - `assets/js/skin.js`：新增 `loadSkinViewerLib()`（动态注入 vendor 脚本、并发共用 Promise、失败清空可重试），
+    `setOpen(true)` 打开面板即预热；`_renderSkin()` / `_applyLoaded()` 改为 async 等待库就绪，
+    加载失败在状态行提示且下次操作可重试。`index.html` 移除阻塞式 vendor `<script>`。
+  - `index.html`：为 9 个静态模块加 `modulepreload`；为 `config.json` 与默认维度
+    `tiles/overworld/manifest.json` 加 `<link rel="preload" as="fetch" crossorigin>`。
+- 验证：smoke 新增 `boot.lazy-skin`——首屏无 vendor 请求、无全局 `skinview3d`；
+  皮肤用例打开面板后断言脚本节点就位、`window.skinview3d.SkinViewer` 可用。
+  （资源条目改用 DOM 判断：此前数百次瓦片请求已占满 250 条 resource timing 缓冲区。）
+- 对照实测（屏蔽 vendor 脚本）：地图 + 标记就绪 1.5–2.3 s → **0.53 s**，移动端首访传输 221 KB → 103 KB。
+- 回归结果：单测 **75/75**、`static-checks.mjs` **30/30**、`smoke.mjs` **43 通过 / 0 失败 / 0 跳过**（44.1 s）。
+
 ## 移动端顶栏维度切换被挤压（2026-11-13）
 
 - 现象：≤420px（含 390px）时顶栏同时容纳「品牌 + 维度切换 + 5 个图标按钮」，维度按钮被压缩到截断，
@@ -98,7 +115,8 @@
   2. 不用 `controls.reset()`：其 position0 是 OrbitControls 构造时的位姿，与 skinview3d
      加载后摆好的默认视角不一致。
 - 3D 查看器 = **skinview3d 3.4.2**，自托管 `assets/vendor/skinview3d.bundle.js`（UMD 自包含 three.js +
-  skinview-utils，477KB，普通 `<script>` 先于 module 引入，挂全局 `window.skinview3d`）。
+  skinview-utils，477KB，**首次打开皮肤面板时**由 `loadSkinViewerLib()` 动态注入，首屏不下载，
+  挂全局 `window.skinview3d`；加载失败可重试，见「首屏加载优化」）。
   项目保持零 npm 依赖 / 无构建步骤，故不用其 ESM 分发包（libs/*.js 依赖 skinview-utils）。
 - `assets/js/skin.js`：纯函数（`normalizeSkinId` / `skinProfileUrl` / `skinUuidUrls` / `isSkinSize` /
   `legacyPatchRects` / `LEGACY_PATCHES` / `padLegacySkin`）+ `SkinPanel`（懒创建 SkinViewer、竞态令牌、单源 8s 超时、FileReader 导入）。
@@ -535,6 +553,7 @@ node --test tests/coords.test.mjs
 | `boot.ui` | `#dimension-switch` 渲染 3 个维度按钮（入口模块 404/语法错误时立即失败并给出资源 URL） |
 | `boot.image` | `#map-image` `complete===true` 且 `naturalWidth>0`（失败时打印 src/naturalWidth/display 实际值） |
 | `boot.console` | 加载阶段无 console error / 未捕获异常 / 未处理 Promise 拒绝 / HTTP ≥ 400 |
+| `boot.lazy-skin` | 首屏不下载皮肤 3D 库：无 vendor 请求、无全局 `skinview3d`；打开皮肤面板后脚本节点就位、`SkinViewer` 可用 |
 | `ui.dimensions` | 三个维度名称正确，默认维度 == `config.defaultDimension` |
 | `dim.switch` | 下界 → 末地 → 主世界：基底图 src、`naturalWidth`、`body[data-dimension]`、标记数量全部正确 |
 | `counts.markers` | `#overlay .marker` 数量 == config 路径点数，`data-id` 集合一致；`#waypoint-list` 列表项数量一致；`#waypoint-empty` 隐藏 |
@@ -586,6 +605,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
+| 2026-11-14（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 75 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 43 通过 / 0 失败 / 0 跳过（44.1 s；新增 boot.lazy-skin，皮肤库改懒加载，剩余 42 项不变）** |
 | 2026-11-13（Asia/Shanghai） | Node v24.18.0 / Windows x64 / 本地服务 | **单测 75 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 42 通过 / 0 失败 / 0 跳过（44.0 s；新增 narrow.toolbar / popup.group-row，ui.toggles 容忍视口外标记）** |
 | 2026-11-10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 78 通过 / 0 失败（含 skin.test.mjs 7 项）；static-checks 30 通过 / 0 失败；smoke 38 通过 / 1 失败（36.2 s；新增 skin.panel 通过，唯一失败为已知数据耦合项 ui.toggles 29/31，见「玩家皮肤 3D 预览」章节）** |
 | 2026-11-07（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 71 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.5 s）；probe-freeze 探针通过（静止外扩窗口、拖动全程零重画、松手零变化、位移与鼠标一致、拖动锐利）** |
@@ -624,10 +644,20 @@ node --test tests/coords.test.mjs
 - ✅ 深链示例 `#dim=overworld&x=120&z=-340&s=0.75&wp=spawn` 与实现一致（`wp` 取路径点 id）。
 - ⚠️ §4.5 表格写「URL 深链 `#wp=出生点`」：实现里 `wp` 是**路径点 id**（如 `wp=spawn`），不是显示名；示例建议改成 id。
 - ⚠️ README 未提到 `node tests/smoke.mjs`、`node tests/static-checks.mjs`，目录树里也没有 `docs/QA.md`；建议在「附：给开发者」补两行命令。
-- ⚠️ `serve.cmd` 在找不到 python 时会回退到 `npx --yes http-server`（需要 npm/联网），与 README「纯静态、零依赖、不联网」的口径略有出入；Python 分支不受影响。
+- ✅ `serve.cmd`（2026-11-14 复核修正）：不存在 `npx --yes http-server` 自动回退——找不到 Python 3 时只打印手工方案并 `exit /b 1`。
+- ✅ `serve.cmd` 改用实际执行 `python -c "import http.server"` / `py -3` 探测（可识别 Microsoft Store 的 python 占位程序，不再只信 `where`）；
+  端口被占用时自动退到 8001–8010。原因：Windows 允许第二个 `http.server` 静默绑定同一端口，但所有连接始终路由给**最先绑定**的旧进程，
+  旧窗口卡住时新窗口会「看起来启动了却打不开」，直到手动 Ctrl + C 掉旧进程。地址统一用 `127.0.0.1` 避免 localhost 解析差异。
 - ℹ️ `资源世界.png`、`overworld-2025.png`、`overworld.png`、`nether.png`、`end.png` 等是讲解用示例文件名，不是「现有文件」声明，无需存在。
 
 以上 README 问题已报告 Lead（README 归 style-dev 所有，QA 不直接改）。
+
+### 4.3 serve.cmd 端口回退与 Python 探测（2026-11-14）
+
+- 空闲端口：等价双击启动后约 0.7 s 内 `http://127.0.0.1:8000/` 返回 200，`index.html` 200；窗口打印 `Ready when Python prints "Serving HTTP on" below.`。
+- 8000 被占用：窗口打印 `[i] Port 8000 is already taken, using 8001 instead.`，`http://127.0.0.1:8001/index.html` 返回 200。
+- 无 Python 3：用退出码 1 的 `python.exe` / `py.exe` 替身测试，正确进入 `[x] Python 3 not found.` 分支并 `exit /b 1`。
+- 文件仍为纯 ASCII + CRLF（cmd 的 `goto` 标签依赖 CRLF）。
 
 ---
 

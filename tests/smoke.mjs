@@ -1232,6 +1232,24 @@ async function main() {
     return `${state.buttons.map((button) => button.text).join(' / ')}；初始标记 ${state.markerCount} 个`;
   });
 
+  await check('boot.lazy-skin', '皮肤 3D 库首屏不下载（未打开面板前无 vendor 请求、无全局 skinview3d）', async () => {
+    const state = await page.evalFn(() => ({
+      global: typeof window.skinview3d !== 'undefined',
+      scripts: [...document.querySelectorAll('script[src]')]
+        .map((node) => node.src)
+        .filter((src) => src.includes('skinview3d.bundle.js')).length,
+      resources: performance
+        .getEntriesByType('resource')
+        .filter((entry) => entry.name.includes('skinview3d.bundle.js')).length,
+    }));
+    if (state.global || state.scripts || state.resources) {
+      throw new Error(
+        `首屏不应加载皮肤库：global=${state.global} script=${state.scripts} resource=${state.resources}`,
+      );
+    }
+    return '无 vendor 请求、无全局 skinview3d';
+  });
+
   await check('boot.image', '底图加载完成（图片 complete=true 且 naturalWidth>0；瓦片维度读 manifest 逻辑尺寸）', async () => {
     if (rep.failed.some((result) => result.id === 'boot.ui')) {
       throw new Error('底图未加载：应用脚本执行失败（见 boot.ui 失败项）');
@@ -3109,6 +3127,17 @@ async function main() {
       if (!opened.convert || opened.convertPressed !== 'false') {
         throw new Error(`皮肤面板打开时换算面板应互斥收起（convert=${opened.convert} pressed=${opened.convertPressed}）`);
       }
+
+      // 打开面板即预热 3D 库（懒加载）：脚本到位、全局可用
+      // 注意：不能用 performance resource 条目判断——此前的瓦片请求早已把
+      // 默认 250 条的 resource timing 缓冲区占满，新条目会被丢弃。
+      await page.waitFor(
+        () =>
+          !!window.skinview3d &&
+          typeof window.skinview3d.SkinViewer === 'function' &&
+          !!document.querySelector('script[src*="skinview3d.bundle.js"]'),
+        { timeout: 10_000, interval: 100, label: '皮肤 3D 库懒加载完成' },
+      );
 
       // 非法 ID 走本地校验，不发网络请求（离线安全）
       await page.evalFn(() => {
