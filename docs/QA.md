@@ -21,7 +21,19 @@
   - `measure.guard-exit` 改为断言退出后**清空**（点/线/`measure-line-done` 全为 0）；
     `measure.guard-reopen` 改为断言重开是**空面板**（不残留上次折线）。
   - `measure.two` / `measure.polyline` / `measure.interact` / `measure.shift-detail` / `measure.panel` 保持通过。
-- 回归结果：单测 **83/83**、`static-checks.mjs` **30/30**、`smoke.mjs` **44 通过 / 0 失败 / 0 跳过**。
+- 回归结果：单测 **83/83**、`static-checks.mjs` **31/31**（新增 `serve.scripts`）、`smoke.mjs` **44 通过 / 0 失败 / 0 跳过**。
+
+## 本地预览 serve.cmd 第二版（2026-11-14）
+
+- 现象（用户复测第一版）：双击后「服务起来要半天，有时候还要按 Ctrl+C 才能起来」，且换端口后浏览器仍停在旧地址。
+- 原因：第一版用 `netstat -ano | findstr` 扫 8000–8010。连接表很大时（VPN / 长会话 / 大量 TIME_WAIT）netstat 会卡住，
+  窗口看起来没反应；而换到 8001 后只打印地址、不打开浏览器，用户打开书签里的 8000 仍看到旧服务。
+- 修复：新增 [`serve.py`](../serve.py)（仅标准库），`serve.cmd` 只负责找 Python 并调用它：
+  - 端口探测改为 `connect_ex('127.0.0.1:port')`（0.15 s 超时，只认 LISTENING，不误伤 TIME_WAIT），仍然 8000–8010；
+  - 打印 `Serving / URL / Stop` 后 `webbrowser.open()` **打开实际端口**，`--no-open` 可关闭；
+  - 只启动一个 Python 进程（不再先探测再起服务）；`.js/.mjs/.json/.webmanifest/.wasm/.svg` 显式 MIME；
+  - 退出码：`0` 正常 / `2` 端口全占 / `3` 其他错误，与「找不到 Python」分开提示。
+- 实测见 §4.3；`static-checks.serve.scripts` 固化「serve.cmd 纯 ASCII + 全 CRLF、serve.py 关键实现存在」。
 
 ## 瓦片瞬时错误重试 + 粗层兜底（2026-11-14）
 
@@ -681,7 +693,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
-| 2026-11-14（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 83 通过 / 0 失败（app-regressions 的 measure mock 补 `lines`；tiles-regressions 8 项）；static-checks 30 通过 / 0 失败；smoke 44 通过 / 0 失败 / 0 跳过（45.4 s；新增 measure.finish，guard-exit/guard-reopen 改为清空语义）** |
+| 2026-11-14（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 83 通过 / 0 失败（app-regressions 的 measure mock 补 `lines`；tiles-regressions 8 项）；static-checks 31 通过 / 0 失败（新增 serve.scripts）；smoke 44 通过 / 0 失败 / 0 跳过（45.4 s；新增 measure.finish，guard-exit/guard-reopen 改为清空语义）** |
 | 2026-11-13（Asia/Shanghai） | Node v24.18.0 / Windows x64 / 本地服务 | **单测 75 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 42 通过 / 0 失败 / 0 跳过（44.0 s；新增 narrow.toolbar / popup.group-row，ui.toggles 容忍视口外标记）** |
 | 2026-11-10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 78 通过 / 0 失败（含 skin.test.mjs 7 项）；static-checks 30 通过 / 0 失败；smoke 38 通过 / 1 失败（36.2 s；新增 skin.panel 通过，唯一失败为已知数据耦合项 ui.toggles 29/31，见「玩家皮肤 3D 预览」章节）** |
 | 2026-11-07（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 71 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.5 s）；probe-freeze 探针通过（静止外扩窗口、拖动全程零重画、松手零变化、位移与鼠标一致、拖动锐利）** |
@@ -721,19 +733,30 @@ node --test tests/coords.test.mjs
 - ⚠️ §4.5 表格写「URL 深链 `#wp=出生点`」：实现里 `wp` 是**路径点 id**（如 `wp=spawn`），不是显示名；示例建议改成 id。
 - ⚠️ README 未提到 `node tests/smoke.mjs`、`node tests/static-checks.mjs`，目录树里也没有 `docs/QA.md`；建议在「附：给开发者」补两行命令。
 - ✅ `serve.cmd`（2026-11-14 复核修正）：不存在 `npx --yes http-server` 自动回退——找不到 Python 3 时只打印手工方案并 `exit /b 1`。
-- ✅ `serve.cmd` 改用实际执行 `python -c "import http.server"` / `py -3` 探测（可识别 Microsoft Store 的 python 占位程序，不再只信 `where`）；
-  端口被占用时自动退到 8001–8010。原因：Windows 允许第二个 `http.server` 静默绑定同一端口，但所有连接始终路由给**最先绑定**的旧进程，
-  旧窗口卡住时新窗口会「看起来启动了却打不开」，直到手动 Ctrl + C 掉旧进程。地址统一用 `127.0.0.1` 避免 localhost 解析差异。
+- ✅ `serve.cmd` 不再自己探测端口：交给 `serve.py` 实际 `connect()` 检查 8000–8010（第一版用 netstat，连接表大时会卡），
+  并在启动后自动打开实际端口。原因：Windows 允许第二个 `http.server` 静默绑定同一端口，但连接始终路由给**最先绑定**的旧进程，
+  旧窗口卡住时新窗口会「看起来启动了却打不开」；地址统一用 `127.0.0.1` 避免 localhost 解析差异。详见 §4.3。
 - ℹ️ `资源世界.png`、`overworld-2025.png`、`overworld.png`、`nether.png`、`end.png` 等是讲解用示例文件名，不是「现有文件」声明，无需存在。
 
 以上 README 问题已报告 Lead（README 归 style-dev 所有，QA 不直接改）。
 
-### 4.3 serve.cmd 端口回退与 Python 探测（2026-11-14）
+### 4.3 serve.cmd 端口选择与自动打开浏览器（2026-11-14，第二版）
 
-- 空闲端口：等价双击启动后约 0.7 s 内 `http://127.0.0.1:8000/` 返回 200，`index.html` 200；窗口打印 `Ready when Python prints "Serving HTTP on" below.`。
-- 8000 被占用：窗口打印 `[i] Port 8000 is already taken, using 8001 instead.`，`http://127.0.0.1:8001/index.html` 返回 200。
-- 无 Python 3：用退出码 1 的 `python.exe` / `py.exe` 替身测试，正确进入 `[x] Python 3 not found.` 分支并 `exit /b 1`。
-- 文件仍为纯 ASCII + CRLF（cmd 的 `goto` 标签依赖 CRLF）。
+- 背景：第一版用 `netstat | findstr` 扫端口，端口冲突能避开，但两个遗留问题——① 连接表很大时（VPN / 长会话）
+  `netstat` 可能卡住，窗口看起来「起来了半天没动静」，按 Ctrl+C 中断后才继续；② 换到 8001 后只打印地址，
+  用户习惯性打开书签里的 8000，看到的还是旧服务，于是「跟之前一模一样」。
+- 第二版：`serve.cmd` 只负责找 Python 并调用 [`serve.py`](../serve.py)：
+  - 端口探测改为 **`connect()`**（`127.0.0.1:port`，0.15 s 超时）：有人在听就换下一个，**不会**被 TIME_WAIT 误拦；
+    范围仍是 8000–8010，`[i]` 行说明实际端口。
+  - 打印 `Serving / URL / Stop` 后用 `webbrowser.open()` **打开实际端口**；`--no-open` 可关闭。
+  - `python` 与 `py -3` 各只尝试一次，不再先跑探测进程再跑服务器——整条链路只启动一个 Python；
+    退出码 `0` 正常 / `2` 端口全占 / `3` 其他错误，`3` 与「找不到 Python」分开提示。
+  - 显式 MIME：`.js` / `.mjs` / `.json` / `.webmanifest` / `.wasm` / `.svg`，避免注册表把 `.js` 映射成非 JS 类型导致模块加载失败。
+- 实测：
+  - 空闲：`serve.cmd --no-open` 约 **0.72 s** 后 `http://127.0.0.1:8000/` 返回 200，`assets/js/app.js` 为 `text/javascript`。
+  - 8000 被占：落到 8001，窗口打印 `[i] Port 8000 is already taken, using 8001 instead.`，8000/8001 同时 200。
+  - 无 Python：PATH 只留 `C:\Windows\System32` 运行，正确进入 `[x] Python 3 not found.` 并 `exit /b 1`。
+  - `serve.cmd` 仍为纯 ASCII + CRLF（`goto` 标签依赖 CRLF）；`serve.py` 为 UTF-8、仅标准库、Python 3.7+。
 
 ---
 

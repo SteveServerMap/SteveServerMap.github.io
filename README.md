@@ -67,7 +67,7 @@ python -m http.server 8000
 http://localhost:8000/
 ```
 
-Windows 用户也可以直接双击仓库里的 **`serve.cmd`**：会自动切换到脚本所在目录并校验 Python 3；若 8000 端口已被占用（例如上一个预览窗口没关），会自动改用 8001–8010 的空闲端口，并在窗口里打印实际地址。
+Windows 用户也可以直接双击仓库里的 **`serve.cmd`**：脚本调用同目录的 [`serve.py`](serve.py)（只用 Python 标准库），自动挑 8000–8010 里第一个空闲端口、打印实际地址并**自动打开浏览器**。8000 被别的程序（或忘记关的旧预览窗口）占用时会换到 8001–8010，提示里写明用了哪个端口——不会再出现「窗口说启动了、浏览器看到的还是旧服务」。不想自动开浏览器就运行 `serve.cmd --no-open`，也可以直接 `python serve.py`。
 
 > ⚠️ **不要直接双击 `index.html` 用 `file://` 打开。**
 > 页面用 `fetch()` 读取 `config.json`，而浏览器的同源策略会拦截 `file://` 下的本地文件请求，结果就是地图区一直显示「无法加载 config.json」。必须通过 `http://` 访问。
@@ -98,7 +98,8 @@ SteveServerMap.github.io/
 ├── 主世界.png                 单张基底图（瓦片加载失败时的兜底）
 ├── 下界.png                   基底地图（下界兜底）
 ├── 末地.png                   基底地图（末地兜底）
-├── serve.cmd                  Windows 一键本地预览
+├── serve.cmd                  Windows 一键本地预览（双击启动，自动选端口 + 打开浏览器）
+├── serve.py                   本地预览服务器本体（Python 标准库，供 serve.cmd 调用）
 ├── docs/
 │   ├── CONTRACT.md            内部接口契约（开发者用，使用者可以跳过）
 │   ├── QA.md                  自动化验收说明与最近结果（开发者用）

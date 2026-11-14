@@ -70,6 +70,8 @@ async function main() {
     'assets/js/sidebar.js',
     'assets/js/measure.js',
     'assets/js/tiles.js',
+    'serve.cmd',
+    'serve.py',
   ];
 
   const fileState = {};
@@ -82,6 +84,18 @@ async function main() {
     }
     ok(missing.length === 0, `缺少文件：${missing.join('、')}`);
     return `${requiredFiles.length}/${requiredFiles.length}`;
+  });
+
+  await rep.check('serve.scripts', 'serve.cmd 纯 ASCII + CRLF，serve.py 含端口探测与自动开浏览器', async () => {
+    const cmd = await fsp.readFile(abs('serve.cmd'));
+    ok(cmd.every((byte) => byte < 128), 'serve.cmd 含非 ASCII 字节（cmd 默认 GBK 代码页会乱码）');
+    const crlf = cmd.toString('latin1').match(/\r\n/g)?.length ?? 0;
+    const lf = cmd.toString('latin1').match(/\n/g)?.length ?? 0;
+    ok(lf === crlf, `serve.cmd 行尾应为 CRLF（\\r\\n ${crlf} 处，\\n ${lf} 处）`);
+    const py = await readText('serve.py');
+    const missing = ['connect_ex', 'ThreadingHTTPServer', 'extensions_map', 'webbrowser.open'].filter((token) => !py.includes(token));
+    ok(missing.length === 0, `serve.py 缺少：${missing.join('、')}`);
+    return `${crlf} 行 CRLF · serve.py OK`;
   });
 
   /* ---------------- 2. 图片资源 ---------------- */
