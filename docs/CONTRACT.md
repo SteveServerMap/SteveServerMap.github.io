@@ -295,32 +295,38 @@ export function formatDistance(value)      // 展示用格式化（<100 保留 1
 export class MeasureLayer {
   constructor(overlayEl)                   // 往 #overlay 里插一个 <svg class="measure-layer">
   setProjection(projection)
-  setActive(bool)                          // 测距模式开关
+  setActive(bool)                          // 测距模式开关（不清空数据；退出清空由 app.js 调 clear）
   addPoint({x, z, snapped?})               // 加测量点，返回 { index, segment }
-  undo() / clear()
+  finish()                                 // 结束当前折线（定格到 this.lines），返回 { points, segments, total }；<2 点时返回 null
+  undo() / clear()                         // 撤销上一点（当前折线空了退回上一条已结束折线）/ 清空全部
   setHover({x, z} | null)                  // 鼠标预览段（虚线 + 实时距离）
   update(viewState)                         // 视图变化时重排（app.js 的 handleViewChange 调）
-  get segments() / get total() / get summary()  // { points, segments, total, active }
+  get segments() / get total() / get allTotal() / get summary()
+                                           // summary: { points, segments, total, active, lines, allTotal }
+                                           //   points/segments/total = 当前折线；lines = 已结束折线数组；allTotal = 累计
 }
 ```
 
 - 测量点存**世界坐标**，缩放/平移/换画幅都不会错位；每次视图变化由 app.js 调 `update(viewState)` 重绘。
-- 渲染：`polyline.measure-line`（实线）、`polyline.measure-preview`（虚线预览）、`g.measure-vertices`（顶点，起点带「起点」标签）、
+- 渲染：`polyline.measure-line`（当前折线）、`g.measure-lines-done > g.measure-done-line > polyline.measure-line-done`（已结束折线，先画、
+  当前折线盖在上面）、`polyline.measure-preview`（虚线预览）、`g.measure-vertices`（顶点，起点带「起点」标签）、
   `g.measure-labels`（每段 `text.measure-seg-label` + 末尾 `text.measure-total-label`「总长 X 格」）。
+  已结束折线的段标注/总长标在各自的 `<g>` 里（也会被 `.measure-seg-label` / `.measure-total-label` 选中）。
 - 交互（app.js 负责）：顶栏 `#btn-measure` 开关；`handleMapClick` 在测距模式下优先加点（不走路径点选中）；
   吸附判定在**图片像素**空间做（`tolPx = 14 / scale`），命中最近路径点则改用该点的世界坐标；
-  `Backspace` 撤销、`Enter`/`Esc` 退出；读数面板 `#measure-readout`（总长 / 逐段 / 撤销 / 清空 / 退出）。
+  `Backspace` 撤销、`Enter` 结束当前折线、`Esc` 退出；读数面板 `#measure-readout`（累计总长 / 已结束条目 / 逐段 / 撤销 / 结束 / 清空 / 退出）。
 - **两道 active 守卫（2026-11-06 修）**：`handleMeasureClick()` 第一行 `if (!state.measureActive) return false;`，
   `MeasureLayer.addPoint()` 第一行 `if (!this.active) return null;`。
   修复前未开测距时点地图也会悄悄加点（且吞掉了路径点选中）；现在非测量模式下的左键点击完全走普通地图交互。
   调试接口 `window.__mapApp.addMeasurePoint()` 会在加点前自动 `setMeasureActive(true)`，保持脚本兼容。
-- **退出语义（2026-11-06 确认）**：点「退出」= 只收起读数面板，测量点/折线保留在地图上；
-  再点顶栏「测距」恢复面板继续编辑。`setMeasureActive()` 与 `updateMeasureReadout()` 统一用
-  `panel.hidden = !state.measureActive`，不再看「有没有测量点」。
+- **结束 / 退出语义（2026-11-14 修订）**：`结束`（Enter / 面板「结束」）= 定格当前折线、留在测距模式，
+  下一次点击开始新折线；`退出`（Esc / 面板「退出」/ 顶栏关闭）= 收起面板**并清空全部折线**，
+  因为「都退出测距了就不需要留着画过的线」。`setMeasureActive(false)` 里调 `measure.clear()`，
+  `updateMeasureReadout()` 仍用 `panel.hidden = !state.measureActive`。
 - 测距模式下 `body.is-measuring` 会禁用 `.marker / .marker-pin / .marker-label` 的 `pointer-events`，
   否则标记会吞掉点击、也没法吸附（与 `.is-picking` 同一套写法）。
 - 调试接口：`window.__mapApp.measure` / `measureSummary()` / `addMeasurePoint(x, z)` / `toggleMeasure()` /
-  `undoMeasurePoint()` / `clearMeasure()`；最近一次点击记在 `window.__measureLastClick`。
+  `finishMeasure()` / `undoMeasurePoint()` / `clearMeasure()`；最近一次点击记在 `window.__measureLastClick`。
 
 ## 6. 配置格式（`config.json`）
 
@@ -396,7 +402,7 @@ spawn 🌍 bed 🛏️ pvp ⚔️ event 🎪 question ❓
      （画幅变了就放弃恢复，退回默认视野）；首次进入某维度仍用「聚焦世界原点 + 1024 方块」。
    - 切维度会清空搜索框（`sidebar.clearSearch()`）与测量点，并 **toast 说明「已清空 N 个测量点」**。
 2. **Esc 优先级（最上层优先）**：路径点详情卡（按 `.marker-popup` 的 `hidden` 判断）> 测距模式 > 取消选中。
-3. **测距文案**：`Enter` 与 `Esc` 都是「结束/退出，测量点保留」，提示里写清楚。
+3. **测距键位（2026-11-14 修订）**：`Enter` = 结束当前折线（留在测距模式）；`Esc` = 退出测距并清空全部折线。
 4. **测距中看详情**：`Shift + 点路径点` 打开该点详情卡（不新增测量点、不退出测距）；吸附半径按屏幕 24px 折算。
 5. **深链 `#dim=…&wp=…`**：现在会 `markers.setSelected(wp)` + `sidebar.setActiveWaypoint(wp)`，别人点链接能直接看到卡片。
 6. **地址栏 hash 只在用户操作后写**：`state.hashArmed` 由滚轮/拖拽/缩放按钮/「整图」「原点」/列表点击定位 武装；

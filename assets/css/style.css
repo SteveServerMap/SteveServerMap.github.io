@@ -2440,6 +2440,16 @@ body[data-sidebar="collapsed"] .sidebar,
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
 }
 
+/* 已结束的折线：保持清晰但稍微退后，当前折线视觉上更突出 */
+.measure-line-done {
+  stroke: var(--accent, #5ad26f);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
+}
+
 .measure-preview {
   stroke: var(--accent, #5ad26f);
   stroke-width: 2;
@@ -2454,7 +2464,8 @@ body[data-sidebar="collapsed"] .sidebar,
   stroke-width: 2;
 }
 
-.measure-vertex:first-child {
+.measure-vertex:first-child,
+.measure-vertex.is-start {
   fill: var(--accent, #5ad26f);
 }
 
@@ -2559,6 +2570,10 @@ body[data-sidebar="collapsed"] .sidebar,
   font-weight: 700;
   list-style: none;
   margin-left: -18px;
+}
+
+.measure-list li.is-done {
+  color: var(--text, #e8efe8);
 }
 
 .measure-hint {

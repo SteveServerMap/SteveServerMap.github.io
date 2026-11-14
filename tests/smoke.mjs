@@ -2671,9 +2671,9 @@ async function main() {
     if (setup.points !== 2) throw new Error(`准备两个测量点失败：${JSON.stringify(setup)}`);
     await page.settle(200);
 
-    // A) 面板标题区域点一下：不能加测量点
-    const head = await rectOf('#measure-readout .measure-head');
-    if (!head) throw new Error('找不到 #measure-readout .measure-head');
+    // A) 面板标题区域点一下：不能加测量点（点 title 本身，避免落到「撤销/结束/清空/退出」按钮上）
+    const head = await rectOf('#measure-readout .measure-title');
+    if (!head) throw new Error('找不到 #measure-readout .measure-title');
     await page.click(head.x, head.y);
     await page.settle(240);
     const afterPanelClick = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
@@ -2698,7 +2698,7 @@ async function main() {
     if (afterClear !== 0) throw new Error(`点「清空」后应为 0 个点，实际 ${afterClear}`);
 
     // D) 面板上滚轮：不缩放地图（面板高度会随内容变化，重新取坐标）
-    const head2 = await rectOf('#measure-readout .measure-head');
+    const head2 = await rectOf('#measure-readout .measure-title');
     const scaleBefore = await page.evalFn(() => Number(window.__mapApp.view.getViewState().scale.toFixed(4)));
     await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head2.x, y: head2.y, button: 'none' });
     await page.send('Input.dispatchMouseEvent', {
@@ -2733,6 +2733,98 @@ async function main() {
     return '面板点击/滚轮不穿透 · 撤销与清空生效 · 地图点击正常';
   });
 
+  await checkIfReady('measure.finish', '测距：结束（按钮/Enter）保留折线并留在测距模式；退出清空', async () => {
+    await ensureSidebarOpen();
+    const rectOf = (selector) =>
+      page.evalFn((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      }, selector);
+
+    const setup = await page.evalFn(() => {
+      if (!window.__mapApp.state.measureActive) document.getElementById('btn-measure').click();
+      window.__mapApp.clearMeasure();
+      window.__mapApp.addMeasurePoint(0, 0);
+      window.__mapApp.addMeasurePoint(200, 0);
+      return { active: window.__mapApp.state.measureActive };
+    });
+    if (!setup.active) throw new Error('准备阶段未进入测距模式');
+    await page.settle(200);
+
+    // A) 真点「结束」：折线定格、仍在测距模式
+    const finishBtn = await rectOf('#measure-finish');
+    if (!finishBtn) throw new Error('找不到 #measure-finish');
+    await page.click(finishBtn.x, finishBtn.y);
+    await page.settle(240);
+    const finished = await page.evalFn(() => {
+      const summary = window.__mapApp.measureSummary();
+      return {
+        active: window.__mapApp.state.measureActive,
+        current: summary.points.length,
+        lines: summary.lines.map((line) => Math.round(line.total)),
+        allTotal: Math.round(summary.allTotal),
+        donePaths: document.querySelectorAll('.measure-line-done').length,
+        listItems: [...document.querySelectorAll('#measure-list li')].map((li) => li.textContent),
+      };
+    });
+    if (!finished.active) throw new Error('「结束」不应退出测距模式');
+    if (finished.current !== 0 || finished.lines.join(',') !== '200' || finished.allTotal !== 200) {
+      throw new Error(`「结束」后应保留 1 条 200 格折线且当前折线为空：${JSON.stringify(finished)}`);
+    }
+    if (finished.donePaths !== 1) throw new Error(`已结束折线应画 1 条，实际 ${finished.donePaths}`);
+    if (!finished.listItems.some((t) => /第 1 条/.test(t))) {
+      throw new Error(`读数面板缺少已结束条目：${JSON.stringify(finished.listItems)}`);
+    }
+
+    // B) Enter：结束第二条，同样留在测距模式
+    await page.evalFn(() => {
+      window.__mapApp.addMeasurePoint(0, 0);
+      window.__mapApp.addMeasurePoint(0, 300);
+    });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await page.settle(240);
+    const afterEnter = await page.evalFn(() => {
+      const summary = window.__mapApp.measureSummary();
+      return {
+        active: window.__mapApp.state.measureActive,
+        lines: summary.lines.map((line) => Math.round(line.total)),
+        donePaths: document.querySelectorAll('.measure-line-done').length,
+      };
+    });
+    if (!afterEnter.active) throw new Error('Enter（结束）不应退出测距模式');
+    if (afterEnter.lines.join(',') !== '200,300' || afterEnter.donePaths !== 2) {
+      throw new Error(`两条折线应同时保留：${JSON.stringify(afterEnter)}`);
+    }
+
+    // C) 真点「退出」：退出测距并清空全部折线
+    const exitBtn = await rectOf('#measure-exit');
+    if (!exitBtn) throw new Error('找不到 #measure-exit');
+    await page.click(exitBtn.x, exitBtn.y);
+    await page.settle(260);
+    const exited = await page.evalFn(() => {
+      const summary = window.__mapApp.measureSummary();
+      return {
+        active: window.__mapApp.state.measureActive,
+        pressed: document.getElementById('btn-measure')?.getAttribute('aria-pressed'),
+        points: summary.points.length,
+        lines: summary.lines.length,
+        donePaths: document.querySelectorAll('.measure-line-done').length,
+        currentPath: document.querySelector('.measure-line')?.getAttribute('points') ?? '',
+        panelHidden: document.getElementById('measure-readout')?.hidden,
+      };
+    });
+    if (exited.active || exited.pressed !== 'false') {
+      throw new Error(`「退出」后应退出测距：${JSON.stringify(exited)}`);
+    }
+    if (exited.points !== 0 || exited.lines !== 0 || exited.donePaths !== 0 || exited.currentPath !== '') {
+      throw new Error(`「退出」应清空所有折线：${JSON.stringify(exited)}`);
+    }
+    if (exited.panelHidden !== true) throw new Error('「退出」后读数面板应收起');
+    return `结束 2 条（200 / 300 格）仍在测距 · 退出后折线全部清空`;
+  });
+
   await checkIfReady('measure.guard-inactive', '测距未开启：点地图不误加点、不进入测距点击路径', async () => {
     await ensureSidebarOpen();
     const before = await page.evalFn(() => {
@@ -2763,7 +2855,7 @@ async function main() {
     return `点击前 ${before.points} 点 → 点击后 ${after.points} 点（进入测距点击=${after.lastClick}）`;
   });
 
-  await checkIfReady('measure.guard-exit', '测距退出：面板收起、测量点保留', async () => {
+  await checkIfReady('measure.guard-exit', '测距退出：面板收起、全部折线清空', async () => {
     await ensureSidebarOpen();
     const viewport = await page.evalFn(() => {
       const rect = document.getElementById('viewport').getBoundingClientRect();
@@ -2787,6 +2879,7 @@ async function main() {
       const panel = document.getElementById('measure-readout');
       return {
         points: window.__mapApp.measureSummary().points.length,
+        donePaths: document.querySelectorAll('.measure-line-done').length,
         panelHidden: panel ? panel.hidden : null,
       };
     });
@@ -2796,38 +2889,54 @@ async function main() {
     await page.settle(220);
     const exited = await page.evalFn(() => {
       const panel = document.getElementById('measure-readout');
+      const summary = window.__mapApp.measureSummary();
       return {
-        points: window.__mapApp.measureSummary().points.length,
+        points: summary.points.length,
+        lines: summary.lines.length,
+        donePaths: document.querySelectorAll('.measure-line-done').length,
         panelHidden: panel ? panel.hidden : null,
         active: window.__mapApp.state.measureActive,
       };
     });
-    if (exited.panelHidden !== true || exited.points !== during.points || exited.active !== false) {
-      throw new Error(`退出后应收面板且点保留：测量中 ${JSON.stringify(during)} → 退出后 ${JSON.stringify(exited)}`);
+    const cleared = exited.points === 0 && exited.lines === 0 && exited.donePaths === 0;
+    if (exited.panelHidden !== true || exited.active !== false || !cleared) {
+      throw new Error(`退出后应收面板并清空折线：测量中 ${JSON.stringify(during)} → 退出后 ${JSON.stringify(exited)}`);
     }
-    return `测量中 ${during.points} 点 → 退出后 ${exited.points} 点、面板隐藏`;
+    return `测量中 ${during.points} 点 → 退出后 ${exited.points} 点 / ${exited.lines} 条、面板隐藏`;
   });
 
-  await checkIfReady('measure.guard-reopen', '测距重开：面板恢复且测量点还在', async () => {
+  await checkIfReady('measure.guard-reopen', '测距重开：面板恢复且不残留上次折线', async () => {
     await ensureSidebarOpen();
-    const before = await page.evalFn(() => window.__mapApp.measureSummary().points.length);
-    if (before < 2) throw new Error(`前置检查失败：应残留至少 2 个测量点，实际 ${before}`);
+    const before = await page.evalFn(() => {
+      const summary = window.__mapApp.measureSummary();
+      return { points: summary.points.length, lines: summary.lines.length };
+    });
+    if (before.points !== 0 || before.lines !== 0) {
+      throw new Error(`前置检查失败：退出测距应已清空，实际 ${JSON.stringify(before)}`);
+    }
     await page.evalFn(() => window.__mapApp.setMeasureActive(true));
     await page.settle(220);
     const reopened = await page.evalFn(() => {
       const panel = document.getElementById('measure-readout');
+      const summary = window.__mapApp.measureSummary();
       return {
-        points: window.__mapApp.measureSummary().points.length,
+        points: summary.points.length,
+        lines: summary.lines.length,
+        donePaths: document.querySelectorAll('.measure-line-done').length,
         panelHidden: panel ? panel.hidden : null,
       };
     });
-    const ok = reopened.panelHidden === false && reopened.points === before;
+    const ok =
+      reopened.panelHidden === false &&
+      reopened.points === 0 &&
+      reopened.lines === 0 &&
+      reopened.donePaths === 0;
     await page.evalFn(() => {
       window.__mapApp.clearMeasure();
       window.__mapApp.setMeasureActive(false);
     });
-    if (!ok) throw new Error(`重开测距应恢复面板且点还在：重开前 ${before} 点 → ${JSON.stringify(reopened)}`);
-    return `重开前 ${before} 点 → 面板显示、${reopened.points} 点`;
+    if (!ok) throw new Error(`重开测距应恢复空面板：${JSON.stringify(reopened)}`);
+    return `重开后面板显示、${reopened.points} 点 / ${reopened.lines} 条`;
   });
 
   await checkIfReady('markers.dense', '密集路径点：合成 ×N 徽标、标签互相避让、连点可轮换选中', async () => {

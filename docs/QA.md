@@ -2,6 +2,27 @@
 
 本文件描述 `tests/` 下的自动化检查：如何运行、覆盖了哪些验收项、最近一次结果和已知限制。
 
+## 测距「结束」与「退出」语义（2026-11-14）
+
+- 现象：测距面板只有「撤销 / 清空 / 退出」，没有「结束当前折线」，想量第二段又得先退出（然后线没了）；
+  点「退出」后画过的折线还留在地图上，但测距模式已经关了，等于「留着一堆没法再操作的线」。
+- 修复：拆成两个动作
+  - **结束**（`Enter` / 面板 `#measure-finish`）：当前折线定格到 `measure.lines`，**留在测距模式**，
+    下一次点击开始新折线；`<2` 点时无操作。
+  - **退出**（`Esc` / 面板「退出」/ 顶栏关闭）：收起面板并 **清空全部折线**（`setMeasureActive(false)` 内调 `measure.clear()`）。
+  - `Backspace` 撤销上一点；当前折线空了会退回最近一条已结束折线再撤销一个点，不会把已结束的线直接丢掉。
+- 渲染：已结束折线画在 `g.measure-done-line`（先画）里，当前折线/预览盖在上面；已结束线的段标注与总长标在各自 `<g>` 中，
+  起点顶点带 `is-start`（主色填充）。
+- 读数面板：顶部显示 **累计总长**（已结束 + 当前），逐条列出「第 N 条：总长 X 格（n 段）」，当前折线逐段列出，
+  多段时显示当前线「合计」，最后一行 `共 N 条 · 累计 X 格`。
+- 回归（`tests/smoke.mjs`）：
+  - 新增 `measure.finish`：真实点击「结束」→ 当前折线归零、`lines` 记 1 条 200 格、地图上有 1 条已结束折线、面板出现「第 1 条」；
+    再画 300 格并按 `Enter` → 2 条、2 条已结束折线；点「退出」→ 模式关闭、面板隐藏、折线与已结束折线全部清空。
+  - `measure.guard-exit` 改为断言退出后**清空**（点/线/`measure-line-done` 全为 0）；
+    `measure.guard-reopen` 改为断言重开是**空面板**（不残留上次折线）。
+  - `measure.two` / `measure.polyline` / `measure.interact` / `measure.shift-detail` / `measure.panel` 保持通过。
+- 回归结果：单测 **83/83**、`static-checks.mjs` **30/30**、`smoke.mjs` **44 通过 / 0 失败 / 0 跳过**。
+
 ## 瓦片瞬时错误重试 + 粗层兜底（2026-11-14）
 
 - 背景：`TileLayer._request()` 的 `img.onerror` 过去一律写进永久负缓存 —— 一次 503 / 断网就足以让某张瓦片
@@ -630,9 +651,10 @@ node --test tests/coords.test.mjs
 | `measure.interact` | 点地图可加点并吸附路径点、可撤销、Esc 退出测距 |
 | `measure.shift-detail` | 测距中 Shift+点路径点打开详情卡且不新增测量点 |
 | `measure.panel` | 测距读数面板上的点击/滚轮不穿透到地图（撤销/清空不误加点） |
+| `measure.finish` | 「结束」（按钮 / Enter）定格当前折线并留在测距模式，可继续画下一条；「退出」清空全部折线 |
 | `measure.guard-inactive` | 测距未开启时点地图不误加点、不进入测距点击路径（`window.__measureLastClick` 保持 null） |
-| `measure.guard-exit` | 点「退出」后读数面板收起、测量点保留 |
-| `measure.guard-reopen` | 再点「测距」面板恢复且测量点还在 |
+| `measure.guard-exit` | 点「退出」后读数面板收起、全部折线清空（点 / `lines` / `measure-line-done` 均为 0） |
+| `measure.guard-reopen` | 退出后再点「测距」恢复空面板，不残留上次折线 |
 | `markers.dense` | 密集路径点合成 ×N 徽标、标签互相避让、连点可轮换选中 |
 | `convert.directions` | 换算面板双向换算正确，定位到画幅内坐标有效 |
 | `convert.real-click` | 换算面板方向按钮真实鼠标点击可切换（viewer 指针捕获回归） |
@@ -659,7 +681,7 @@ node --test tests/coords.test.mjs
 
 | 时间 | 环境 | 结果 |
 | --- | --- | --- |
-| 2026-11-14（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 83 通过 / 0 失败（tiles-regressions 新增 8 项：404/瞬时错误分流与粗层兜底）；static-checks 30 通过 / 0 失败；smoke 43 通过 / 0 失败 / 0 跳过（44.4 s）** |
+| 2026-11-14（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 83 通过 / 0 失败（app-regressions 的 measure mock 补 `lines`；tiles-regressions 8 项）；static-checks 30 通过 / 0 失败；smoke 44 通过 / 0 失败 / 0 跳过（45.4 s；新增 measure.finish，guard-exit/guard-reopen 改为清空语义）** |
 | 2026-11-13（Asia/Shanghai） | Node v24.18.0 / Windows x64 / 本地服务 | **单测 75 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 42 通过 / 0 失败 / 0 跳过（44.0 s；新增 narrow.toolbar / popup.group-row，ui.toggles 容忍视口外标记）** |
 | 2026-11-10（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 78 通过 / 0 失败（含 skin.test.mjs 7 项）；static-checks 30 通过 / 0 失败；smoke 38 通过 / 1 失败（36.2 s；新增 skin.panel 通过，唯一失败为已知数据耦合项 ui.toggles 29/31，见「玩家皮肤 3D 预览」章节）** |
 | 2026-11-07（Asia/Shanghai） | Node v24.22.1 / Windows x64 / 本地服务 | **单测 71 通过 / 0 失败；static-checks 30 通过 / 0 失败；smoke 39 通过 / 0 失败 / 0 跳过（35.5 s）；probe-freeze 探针通过（静止外扩窗口、拖动全程零重画、松手零变化、位移与鼠标一致、拖动锐利）** |

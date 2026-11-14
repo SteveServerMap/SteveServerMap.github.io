@@ -214,6 +214,7 @@ function initViewer() {
   bindClick('btn-grid', toggleGrid);
   bindClick('btn-measure', toggleMeasure);
   bindClick('measure-undo', () => undoMeasurePoint());
+  bindClick('measure-finish', () => finishMeasure());
   bindClick('measure-clear', () => clearMeasure());
   bindClick('measure-exit', () => setMeasureActive(false));
 
@@ -401,7 +402,9 @@ async function applyDimension(dimensionId, opts = {}) {
   tryCall(view, 'setProjection', null);
   if (tileLayer) tileLayer.setActive(false);
   setBaseLayerMode('empty');
-  const measurePointsBeforeSwitch = measure ? measure.points.length : 0;
+  const measurePointsBeforeSwitch = measure
+    ? measure.points.length + measure.lines.reduce((n, line) => n + line.points.length, 0)
+    : 0;
   tryCall(measure, 'setProjection', null);
   tryCall(measure, 'clear');
   updateMeasureReadout();
@@ -777,13 +780,14 @@ function setMeasureActive(active) {
   if (!measure) return;
   state.measureActive = !!active;
   tryCall(measure, 'setActive', state.measureActive);
+  // 退出测距 = 收起面板 + 清空全部折线（保留测量线的用法改用「结束」，见 finishMeasure）
+  if (!state.measureActive) tryCall(measure, 'clear');
   const btn = $('btn-measure');
   if (btn) {
     btn.setAttribute('aria-pressed', state.measureActive ? 'true' : 'false');
     btn.classList.toggle('is-active', state.measureActive);
   }
   const panel = $('measure-readout');
-  // 退出 = 收起面板；已有的测量线/点保留在图上，再点「测距」可继续编辑
   if (panel) panel.hidden = !state.measureActive;
   document.body.classList.toggle('is-measuring', state.measureActive);
   updateMeasureReadout();
@@ -791,6 +795,16 @@ function setMeasureActive(active) {
 
 function toggleMeasure() {
   setMeasureActive(!state.measureActive);
+}
+
+/** 结束当前折线：定格保留、留在测距模式，下一次点地图开始新的一条 */
+function finishMeasure() {
+  if (!measure || !state.measureActive) return;
+  const done = tryCall(measure, 'finish');
+  updateMeasureReadout();
+  if (done && done.segments.length) {
+    toast(`已结束本条测量 · 总长 ${formatDistance(done.total)} 格`);
+  }
 }
 
 function clearMeasure() {
@@ -869,11 +883,17 @@ function updateMeasureReadout() {
   const totalEl = $('measure-total');
   const listEl = $('measure-list');
   if (!measure || !panel || !totalEl) return;
-  const summary = measure.summary || { segments: [], total: 0, points: [] };
-  panel.hidden = !state.measureActive; // 未开启测距时面板一律收起（点仍保留在地图上）
-  totalEl.textContent = `${formatDistance(summary.total)} 格`;
+  const summary = measure.summary || { segments: [], total: 0, points: [], lines: [], allTotal: 0 };
+  panel.hidden = !state.measureActive;
+  totalEl.textContent = `${formatDistance(summary.allTotal)} 格`;
   if (listEl) {
     listEl.textContent = '';
+    summary.lines.forEach((line, index) => {
+      const item = document.createElement('li');
+      item.className = 'is-done';
+      item.textContent = `第 ${index + 1} 条：总长 ${formatDistance(line.total)} 格（${line.segments.length} 段）`;
+      listEl.appendChild(item);
+    });
     summary.segments.forEach((value, index) => {
       const item = document.createElement('li');
       const a = summary.points[index];
@@ -885,6 +905,12 @@ function updateMeasureReadout() {
       const totalItem = document.createElement('li');
       totalItem.className = 'is-total';
       totalItem.textContent = `合计 ${formatDistance(summary.total)} 格（${summary.segments.length} 段）`;
+      listEl.appendChild(totalItem);
+    }
+    if (summary.lines.length) {
+      const totalItem = document.createElement('li');
+      totalItem.className = 'is-total';
+      totalItem.textContent = `共 ${summary.lines.length} 条 · 累计 ${formatDistance(summary.allTotal)} 格`;
       listEl.appendChild(totalItem);
     }
   }
@@ -1551,7 +1577,7 @@ function bindGlobalKeys() {
     }
     if ((e.key === 'Enter' || e.key === 'Return') && isMeasureActive() && !isTyping(e.target)) {
       e.preventDefault();
-      setMeasureActive(false);
+      finishMeasure(); // 结束当前折线但不退出测距（退出用 Esc / 面板「退出」）
       return;
     }
     if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !isTyping(e.target)) {
@@ -1621,6 +1647,7 @@ window.__mapApp = {
   toggleMeasure,
   setMeasureActive,
   clearMeasure,
+  finishMeasure,
   undoMeasurePoint,
   /** 瓦片底图调试口：只读快照，不暴露实例（避免测试误改内部状态） */
   tiles: () => tileStats(),

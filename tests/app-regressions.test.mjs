@@ -57,9 +57,9 @@ function harness(dimensions, options = {}) {
     setGroupVisible() {}, setLabelMode() {}, update() {},
   };
   const measure = {
-    points: [], hover: null,
+    points: [], lines: [], hover: null,
     setProjection(value) { this.projection = value; },
-    clear() { this.points = []; this.hover = null; },
+    clear() { this.points = []; this.lines = []; this.hover = null; },
     setHover(value) { this.hover = value; },
   };
   const tileLayer = { active: true, setActive(value) { this.active = value; }, update() {} };
