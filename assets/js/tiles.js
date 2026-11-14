@@ -33,7 +33,12 @@
  *     画面按 1px 台阶移动，拖起来会抖）；视口滑出窗口（或缩放 / 尺寸 / dpr 变化 /
  *     新瓦片解码完成）才重画一次；静止与拖拽同一条路径，进出交互零重画零变化；
  *   - 放大（1 瓦片像素 ≥ 1 canvas 像素）时关掉 imageSmoothingEnabled，保持像素锐利；
- *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），一律静默跳过；
+ *   - 瓦片缺失（404）是正常情况（导出的都是非全透明瓦片），静默跳过且永久负缓存；
+ *   - 5xx / 断网这类**瞬时**错误不是缺瓦片：按 2/5/10 秒退避重试 3 次，仍失败则记 60 秒
+ *     的瞬时失败（到期或 online / visibilitychange 后重试），绝不写进永久缺失列表；
+ *   - **粗层兜底**：细层瓦片还在请求 / 已缺失 / 瞬时失败时，先贴父级（更粗）瓦片，
+ *     细层解码完成后重画替换 —— 首次进入与放大时不会出现空白格（放大方向直接用
+ *     LRU 里的上一层瓦片，零额外请求；只有真缺失才为补洞请求粗层）。
  *   - 已解码图片走 LRU 缓存（默认 400 张），缺失列表单独记，避免反复请求；
  *   - 瓦片 URL 带 ?v=<manifest.generatedAt> 版本参数：瓦片重新生成后 URL 变化，
  *     自动绕开浏览器 HTTP 缓存（GitHub Pages 静态资源默认 max-age=600）。
@@ -47,6 +52,15 @@ const WINDOW_OVERSCAN = 0.5;
 
 /** 「缺失瓦片」负缓存的条目上限（只是一个 URL 集合，几乎不占内存） */
 export const MAX_MISSING_TILES = 4096;
+
+/** 瞬时错误的退避间隔（毫秒）：最多重试 3 次（总计 2/5/10 秒） */
+export const TILE_RETRY_DELAYS = [2000, 5000, 10000];
+
+/** 重试全部失败后，该瓦片进入「瞬时失败」状态多久（毫秒）；到期或网络恢复后可再试 */
+export const TILE_TRANSIENT_TTL = 60_000;
+
+/** 细层瓦片不可用时，最多向上找几层粗瓦片兜底 */
+const MAX_FALLBACK_DEPTH = 2;
 
 /**
  * canvas 位图的像素上限（视口渲染下 = 视口 × dpr 的像素数，约等于一个高清屏的量级）。
@@ -87,6 +101,67 @@ export function tileBaseFromManifest(manifestUrl = DEFAULT_MANIFEST) {
 function roundPx(value) {
   const rounded = Math.round(value * 10000) / 10000;
   return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+/**
+ * Resource Timing 状态码缓存：URL -> HTTP 状态码。
+ *
+ * `<img>` 的 error 事件不带状态码，但「全透明瓦片未导出（404）」和「Pages 瞬时 503 / 断网」
+ * 在显示上都不是一张图，处理策略却完全相反：前者永久跳过，后者必须重试。
+ * 同源图片的 Resource Timing 条目在 error 事件触发时已经就绪（Chromium 实测同步可见），
+ * 因此这里零额外请求就能分流。读不到（老浏览器 / 条目被清空）时返回 NaN，按瞬时错误处理。
+ *
+ * 为什么用 PerformanceObserver 而不是 `getEntriesByName`：Resource Timing 缓冲区默认只有
+ * 250 条，**满了以后新条目会被直接丢弃**（会话里瓦片请求很容易破千），此时同步查缓冲
+ * 永远查不到；observer 在条目进缓冲之前就收到它，因此不受缓冲区限制（实测缓冲区设为 5
+ * 时仍能读到第 41 个条目的状态码）。
+ */
+const TIMING_STATUS_CAP = 4096;
+const timingStatuses = new Map();
+let timingObserver = null;
+let timingObserverTried = false;
+
+function ensureStatusObserver() {
+  if (timingObserverTried) return;
+  timingObserverTried = true;
+  if (typeof PerformanceObserver === 'undefined') return;
+  try {
+    timingObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const status = entry.responseStatus;
+        if (!isNum(status)) continue;
+        if (!timingStatuses.has(entry.name) && timingStatuses.size >= TIMING_STATUS_CAP) {
+          const oldest = timingStatuses.keys().next(); // Map 插入顺序 = 最早
+          if (!oldest.done) timingStatuses.delete(oldest.value);
+        }
+        timingStatuses.set(entry.name, status);
+      }
+    });
+    timingObserver.observe({ type: 'resource' });
+  } catch {
+    timingObserver = null; // 不支持 resource 时序（如 Node）：退回同步查缓冲
+  }
+}
+
+/**
+ * @param {string} url `img.src`（浏览器里是绝对 URL）
+ * @returns {number} HTTP 状态码；未知时 NaN
+ */
+function responseStatusOf(url) {
+  if (!url) return NaN;
+  const observed = timingStatuses.get(url);
+  if (isNum(observed)) return observed;
+  if (typeof performance === 'undefined' || typeof performance.getEntriesByName !== 'function') {
+    return NaN;
+  }
+  try {
+    const entries = performance.getEntriesByName(url);
+    if (!entries || !entries.length) return NaN;
+    const status = entries[entries.length - 1].responseStatus;
+    return isNum(status) ? status : NaN;
+  } catch {
+    return NaN;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -367,8 +442,16 @@ export class TileLayer {
     this.tileset = null;
     /** LRU：key -> {img}（Map 的插入顺序即使用顺序） */
     this._images = new Map();
-    /** 404 的瓦片（不重复请求） */
+    /** 404 / 解码失败的瓦片（永久跳过，不再请求） */
     this._missing = new Set();
+    /** 瞬时失败（重试耗尽）：key -> 过期时间戳；到期 / 联网 / 回到前台后可再试 */
+    this._transient = new Map();
+    /** 已重试次数：key -> n（成功或判定永久缺失时清掉） */
+    this._retries = new Map();
+    /** 退避中的定时器：key -> setTimeout id */
+    this._retryTimers = new Map();
+    /** TTL 到期后统一重试瞬时失败的定时器（同一时刻最多一个） */
+    this._transientTimer = 0;
     /** 正在请求中的瓦片 */
     this._pending = new Set();
     this._generation = 0;    // reset 后旧请求不得影响新一代的缓存 / pending
@@ -384,10 +467,26 @@ export class TileLayer {
     this._requests = 0;
     this._loaded = 0;
     this._missingCount = 0;
+    this._retryCount = 0;
     this._drawn = 0;
     this._visibleTiles = 0;
     this._draws = 0;
 
+    // 断网恢复 / 回到前台时立刻重试瞬时失败的瓦片（不必干等 60 秒 TTL）
+    this._onOnline = () => this.retryTransient();
+    this._onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        this.retryTransient();
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('online', this._onOnline);
+    }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', this._onVisibility);
+    }
+
+    ensureStatusObserver();
     if (tileset) this.setTileset(tileset);
   }
 
@@ -454,7 +553,11 @@ export class TileLayer {
   reset({ keepCache = true } = {}) {
     this._generation += 1;
     this._pending.clear();
+    this._clearRetryTimers();
+    this._retries.clear();
+    this._transient.clear();
     this._cancelFrame();
+    this._clearTransientTimer();
     this._clearCanvas();
     this._level = null;
     this._window = null;
@@ -466,12 +569,19 @@ export class TileLayer {
       this._requests = 0;
       this._loaded = 0;
       this._missingCount = 0;
+      this._retryCount = 0;
       this._draws = 0;
     }
   }
 
   destroy() {
     this._destroyed = true;
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('online', this._onOnline);
+    }
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', this._onVisibility);
+    }
     this._cancelFrame();
     this.reset({ keepCache: false });
     this.tileset = null;
@@ -493,6 +603,8 @@ export class TileLayer {
       requests: this._requests,
       loaded: this._loaded,
       missing: this._missingCount,
+      retries: this._retryCount,
+      transient: this._transient.size,
       cache: this._images.size,
       maxTiles: this.maxTiles,
       visibleTiles: this._visibleTiles,
@@ -596,8 +708,8 @@ export class TileLayer {
     const clampX1 = Math.min(win.x1, tileset.imageWidth);
     const clampY1 = Math.min(win.y1, tileset.imageHeight);
 
-    this._drawn = 0;
     if (!(clampX1 > clampX0) || !(clampY1 > clampY0)) {
+      this._drawn = 0;
       this._visibleTiles = 0;
       this._draws += 1;
       return;
@@ -618,24 +730,126 @@ export class TileLayer {
     const lastRow = Math.ceil((gy1 - originOffsetZ) / tileSize) - 1;
 
     let visible = 0;
+    let drawn = 0;
+    const ready = [];
+    const fallbacks = [];
+    const fallbackKeys = new Set();
     for (let row = Math.max(firstRow, level.minZ); row <= Math.min(lastRow, level.maxZ); row += 1) {
       for (let col = Math.max(firstCol, level.minX); col <= Math.min(lastCol, level.maxX); col += 1) {
         visible += 1;
         const img = this._loadTile(level, col, row);
-        if (!img) continue;
-        const dx = ((originOffsetX + col * tileSize) * bpp - win.x0) * kk;
-        const dy = ((originOffsetZ + row * tileSize) * bpp - win.y0) * kk;
-        const dsize = tileSize * bpp * kk;
-        try {
-          ctx.drawImage(img, dx, dy, dsize, dsize);
-          this._drawn += 1;
-        } catch (err) {
-          // 极少见（图片被解绑 / 解码失败）：静默跳过这一张
+        if (img) {
+          ready.push({
+            img,
+            dx: ((originOffsetX + col * tileSize) * bpp - win.x0) * kk,
+            dy: ((originOffsetZ + row * tileSize) * bpp - win.y0) * kk,
+            dsize: tileSize * bpp * kk,
+          });
+          continue;
         }
+        // 细层还没到（请求中 / 已缺失 / 瞬时失败）：先找粗层顶一下，细层到达后重画替换。
+        // 请求中的细层只查缓存里的粗层：首次进入时粗层没缓存，不能为了兜底把整个视口的
+        // 粗瓦片都下下来（粗层是抗锯齿降采样，单张比细层还大，首屏字节会翻几倍）；
+        // 放大时上一层的粗瓦片刚用过、还在 LRU 里，兜底零请求（缩小方向没有更粗层的缓存，
+        // 与旧版一样等新层级到达）。
+        // 真正缺失 / 瞬时失败的细层才允许请求粗层 —— 那是补洞，值得花。
+        const key = this._tileKey(tileset, level, col, row);
+        const fallback = this._collectFallback(level, col, row, !this._pending.has(key));
+        if (!fallback) continue;
+        const fallbackKey = `${fallback.level.level}/${fallback.col}_${fallback.row}`;
+        if (fallbackKeys.has(fallbackKey)) continue;
+        fallbackKeys.add(fallbackKey);
+        fallbacks.push(fallback);
       }
     }
+
+    // 粗层先画（更粗的先贴、更细的后贴），细层最后覆盖 —— 半透明像素不会被反复叠亮
+    fallbacks.sort((a, b) => b.level.level - a.level.level);
+    for (const tile of fallbacks) {
+      if (this._drawFallback(ctx, tile, win, kk, tileset)) drawn += 1;
+    }
+    for (const item of ready) {
+      try {
+        ctx.drawImage(item.img, item.dx, item.dy, item.dsize, item.dsize);
+        drawn += 1;
+      } catch (err) {
+        // 极少见（图片被解绑 / 解码失败）：静默跳过这一张
+      }
+    }
+    this._drawn = drawn;
     this._visibleTiles = visible;
     this._draws += 1;
+  }
+
+  /**
+   * 为一格不可用的细层瓦片找粗层兜底：从最近的一层往上试，找到第一张已解码的粗瓦片。
+   * 粗层自己也可能是 404 / 请求中，所以最多向上找 MAX_FALLBACK_DEPTH 层。
+   * @param {boolean} [allowRequest] false 时只看缓存（细层仍在请求中，不能为了兜底先下粗瓦片）
+   * @returns {{level: TileLevel, col: number, row: number, img: HTMLImageElement}|null}
+   */
+  _collectFallback(level, col, row, allowRequest = true) {
+    const tileset = this.tileset;
+    if (!tileset) return null;
+    const levels = tileset.levels;
+    const index = levels.indexOf(level);
+    if (index < 0) return null;
+
+    const tileSize = tileset.tileSize;
+    const bpp = level.blocksPerPixel;
+    // 细层瓦片中心点（图片像素）：用中心而不是左上角，避免边界上落到相邻的粗瓦片
+    const centerX = (level.originBlockX - tileset.bounds.xMin) + (col + 0.5) * tileSize * bpp;
+    const centerZ = (level.originBlockZ - tileset.bounds.zMin) + (row + 0.5) * tileSize * bpp;
+
+    for (let step = 1; step <= MAX_FALLBACK_DEPTH && index + step < levels.length; step += 1) {
+      const ancestor = levels[index + step];
+      const aBpp = ancestor.blocksPerPixel;
+      const originOffsetX = (ancestor.originBlockX - tileset.bounds.xMin) / aBpp;
+      const originOffsetZ = (ancestor.originBlockZ - tileset.bounds.zMin) / aBpp;
+      const aCol = Math.floor((centerX / aBpp - originOffsetX) / tileSize);
+      const aRow = Math.floor((centerZ / aBpp - originOffsetZ) / tileSize);
+      if (aCol < ancestor.minX || aCol > ancestor.maxX || aRow < ancestor.minZ || aRow > ancestor.maxZ) {
+        continue;
+      }
+      const img = allowRequest
+        ? this._loadTile(ancestor, aCol, aRow)
+        : this._cachedTile(ancestor, aCol, aRow);
+      if (img) return { level: ancestor, col: aCol, row: aRow, img };
+    }
+    return null;
+  }
+
+  /**
+   * 把一张粗瓦片画到它自己的目标矩形（细层会在后面覆盖）。
+   * 粗层最外圈可能超出世界范围，这里按地图边界裁源矩形，避免画到地图外。
+   */
+  _drawFallback(ctx, { level, col, row, img }, win, kk, tileset) {
+    const tileSize = tileset.tileSize;
+    const bpp = level.blocksPerPixel;
+    const originOffsetX = (level.originBlockX - tileset.bounds.xMin) / bpp;
+    const originOffsetZ = (level.originBlockZ - tileset.bounds.zMin) / bpp;
+    const span = tileSize * bpp; // 这张粗瓦片覆盖的图片像素边长
+    const px0 = (originOffsetX + col * tileSize) * bpp;
+    const pz0 = (originOffsetZ + row * tileSize) * bpp;
+
+    const cx0 = Math.max(px0, 0);
+    const cz0 = Math.max(pz0, 0);
+    const cx1 = Math.min(px0 + span, tileset.imageWidth);
+    const cz1 = Math.min(pz0 + span, tileset.imageHeight);
+    if (!(cx1 > cx0) || !(cz1 > cz0)) return false;
+
+    const sx = ((cx0 - px0) / span) * tileSize;
+    const sy = ((cz0 - pz0) / span) * tileSize;
+    const sw = ((cx1 - cx0) / span) * tileSize;
+    const sh = ((cz1 - cz0) / span) * tileSize;
+    try {
+      ctx.drawImage(
+        img, sx, sy, sw, sh,
+        (cx0 - win.x0) * kk, (cz0 - win.y0) * kk, (cx1 - cx0) * kk, (cz1 - cz0) * kk,
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** 按窗口尺寸调整 canvas 位图：窗口 × scale × dpr，超出像素上限时等比降低 */
@@ -677,10 +891,7 @@ export class TileLayer {
   _loadTile(level, col, row) {
     const tileset = this.tileset;
     if (!tileset) return null;
-    // 缓存键带上版本：manifest 更新后（同 baseUrl）旧解码不会命中，重新取新瓦片
-    const key = tileset.version
-      ? `v${tileset.version}/${level.level}/${col}_${row}`
-      : `${level.level}/${col}_${row}`;
+    const key = this._tileKey(tileset, level, col, row);
 
     const cached = this._images.get(key);
     if (cached) {
@@ -689,14 +900,39 @@ export class TileLayer {
       this._images.set(key, cached);
       return cached;
     }
-    if (this._missing.has(key) || this._pending.has(key)) return null;
+    if (this._missing.has(key) || this._pending.has(key) || this._retryTimers.has(key)) return null;
+    // 瞬时失败过了 TTL：放行重新请求（没到期就继续用粗层兜底顶着）
+    const until = this._transient.get(key);
+    if (until !== undefined) {
+      if (Date.now() < until) return null;
+      this._transient.delete(key);
+    }
 
     this._request(key, tileset.urlFor(level.level, col, row));
     return null;
   }
 
+  /** 缓存键带上版本：manifest 更新后（同 baseUrl）旧解码不会命中，重新取新瓦片 */
+  _tileKey(tileset, level, col, row) {
+    const source = tileset || this.tileset;
+    if (!source) return '';
+    return source.version
+      ? `v${source.version}/${level.level}/${col}_${row}`
+      : `${level.level}/${col}_${row}`;
+  }
+
+  /** 只查缓存（命中顺手挪到 LRU 队尾），绝不发请求 */
+  _cachedTile(level, col, row) {
+    const key = this._tileKey(this.tileset, level, col, row);
+    const cached = key ? this._images.get(key) : null;
+    if (!cached) return null;
+    this._images.delete(key);
+    this._images.set(key, cached);
+    return cached;
+  }
+
   _request(key, url) {
-    if (typeof Image !== 'function') return;
+    if (typeof Image !== 'function' || this._pending.has(key)) return;
     const generation = this._generation;
     const img = new Image();
     img.decoding = 'async';
@@ -707,19 +943,32 @@ export class TileLayer {
       if (this._destroyed || generation !== this._generation) return;
       this._pending.delete(key);
       if (!img.naturalWidth || !img.naturalHeight) {
+        // 200 但解不出像素：图本身坏了，重试没有意义
+        this._retries.delete(key);
+        this._transient.delete(key);
         this._markMissing(key);
+        this._invalidate(); // 让粗层兜底补上这一格
         return;
       }
       this._loaded += 1;
+      this._retries.delete(key);
+      this._transient.delete(key);
       this._put(key, img);
-      this._window = null; // 新内容到达：下一帧必须重画（否则冻结判定会把新瓦片永远挡在门外）
-      this._schedule();
+      this._invalidate(); // 新内容到达：下一帧必须重画（否则冻结判定会把新瓦片永远挡在门外）
+      return;
     };
-    // 404 / 解码失败都是正常情况（全透明瓦片不导出）：静默忽略，不再重试
+    // 404 / 410 = 全透明瓦片不导出，正常情况，永久跳过；5xx / 断网 = 瞬时错误，必须重试
     img.onerror = () => {
       if (this._destroyed || generation !== this._generation) return;
       this._pending.delete(key);
-      this._markMissing(key);
+      if (this._isPermanentFailure(img.src || url)) {
+        this._retries.delete(key);
+        this._transient.delete(key);
+        this._markMissing(key);
+        this._invalidate(); // 让粗层兜底补上这一格（否则冻结窗口里会留下永久空白）
+        return;
+      }
+      this._scheduleRetry(key, url);
     };
 
     try {
@@ -727,6 +976,36 @@ export class TileLayer {
     } catch {
       img.onerror();
     }
+  }
+
+  /**
+   * 这次失败是不是「永久缺失」（404/410 的透明瓦片，或 200 但解码失败）。
+   * 读不到状态码时按瞬时错误处理 —— 宁可多试几次，也不要把一次 503 变成永久空白。
+   */
+  _isPermanentFailure(url) {
+    const status = responseStatusOf(url);
+    return status === 404 || status === 410 || (status >= 200 && status < 300);
+  }
+
+  /** 瞬时错误：按 2/5/10 秒退避重试；三次都失败 → 记 60 秒瞬时失败，到期/联网后重来 */
+  _scheduleRetry(key, url) {
+    const attempt = (this._retries.get(key) || 0) + 1;
+    if (attempt > TILE_RETRY_DELAYS.length) {
+      this._retries.delete(key);
+      this._markTransient(key);
+      return;
+    }
+    this._retries.set(key, attempt);
+    this._retryCount += 1;
+    const generation = this._generation;
+    const timer = setTimeout(() => {
+      this._retryTimers.delete(key);
+      if (this._destroyed || generation !== this._generation) return;
+      const until = this._transient.get(key);
+      if (until !== undefined && Date.now() < until) return;
+      this._request(key, url);
+    }, TILE_RETRY_DELAYS[attempt - 1]);
+    this._retryTimers.set(key, timer);
   }
 
   _markMissing(key) {
@@ -737,6 +1016,60 @@ export class TileLayer {
       if (!first.done) this._missing.delete(first.value);
     }
     this._missing.add(key);
+  }
+
+  /** 重试耗尽的瞬时失败：只挡 60 秒，绝不写进永久缺失 */
+  _markTransient(key) {
+    if (this._transient.size >= MAX_MISSING_TILES) {
+      const first = this._transient.keys().next();
+      if (!first.done) this._transient.delete(first.value);
+    }
+    this._transient.set(key, Date.now() + TILE_TRANSIENT_TTL);
+    // 静止画面不会自己重画：到点统一放行一轮，避免非要等用户拖动才恢复
+    if (!this._transientTimer) {
+      this._transientTimer = setTimeout(() => {
+        this._transientTimer = 0;
+        this.retryTransient();
+      }, TILE_TRANSIENT_TTL);
+    }
+  }
+
+  /**
+   * 网络恢复 / 回到前台 / 瞬时失败 TTL 到期：作废瞬时失败与退避中的定时器，
+   * 让当前窗口重新请求。由 online / visibilitychange 监听器与 TTL 定时器调用。
+   */
+  retryTransient() {
+    if (this._destroyed) return;
+    const timers = this._clearRetryTimers();
+    this._clearTransientTimer();
+    this._retries.clear();
+    const hadTransient = this._transient.size > 0;
+    this._transient.clear();
+    if (!hadTransient && !timers) return;
+    this._invalidate();
+  }
+
+  _clearRetryTimers() {
+    let count = 0;
+    for (const timer of this._retryTimers.values()) {
+      if (typeof clearTimeout === 'function') clearTimeout(timer);
+      count += 1;
+    }
+    this._retryTimers.clear();
+    return count;
+  }
+
+  _clearTransientTimer() {
+    if (!this._transientTimer) return;
+    if (typeof clearTimeout === 'function') clearTimeout(this._transientTimer);
+    this._transientTimer = 0;
+  }
+
+  /** 作废冻结窗口并安排下一帧重画：内容有变（到达 / 缺失 / 恢复）时都要走这里 */
+  _invalidate() {
+    if (this._destroyed) return;
+    this._window = null;
+    this._schedule();
   }
 
   _put(key, img) {

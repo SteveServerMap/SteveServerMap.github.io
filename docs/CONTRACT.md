@@ -471,10 +471,26 @@ manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null �
    静止与拖拽同一条路径 —— 进出交互零重画零变化（没有「进入交互换窗口」那一帧的画面微跳）。
 4. **像素锐利**：`canvasPxPerTilePx = 2^L × scale × dpr × backingFactor >= 1`（放大）时
    `ctx.imageSmoothingEnabled = false` 并给 canvas 加 `image-rendering: pixelated`；缩小时才允许插值。
-5. **404 静默**：瓦片缺失是正常的（全透明瓦片不导出），`img.onerror` 只记进负缓存，不打印、不重试。
-6. **缓存**：已解码图片 `Map<key, HTMLImageElement>`，LRU 上限 `MAX_CACHED_TILES = 400`（约 100 MB）；
+5. **缺失 / 出错分流**（2026-11-14）：
+   - `404 / 410`（全透明瓦片不导出）与「200 但解码失败」→ 永久缺失
+     （`_missing` Set，上限 `MAX_MISSING_TILES = 4096`），静默跳过、不再请求、不打印；
+   - `5xx / 408 / 429 / 断网 / 读不到状态` → **瞬时错误**：按 `TILE_RETRY_DELAYS = [2000, 5000, 10000]`
+     退避重试最多 3 次；仍失败进 `_transient`（`TILE_TRANSIENT_TTL = 60_000`），**绝不写进永久缺失**。
+     TTL 到期由单一定时器统一放行一轮；`online` / `visibilitychange`（回到前台）立即清空并重画。
+   - 状态码来源：`<img>` 的 error 事件不带状态码，用 **PerformanceObserver（`responseStatus`）** 同步读取，
+     模块级单例、上限 4096 条。不用 `getEntriesByName` 兜底判断的唯一来源：resource timing 缓冲区
+     默认 250 条，**满了以后新条目直接丢弃**（长会话瓦片请求破千），会让 404 被误判成瞬时错误。
+     读不到时按瞬时错误处理（宁可多试，也不把一次 503 变成永久空白）。
+6. **粗层兜底**（2026-11-14）：细层瓦片「请求中 / 已缺失 / 瞬时失败」时，按瓦片中心点映射到最近的
+   可解码粗层（`MAX_FALLBACK_DEPTH = 2`，父级 → 祖父级）先贴上去；细层到达后 `_invalidate()` 强制重画替换。
+   粗瓦片按自己的目标矩形绘制，源矩形按 `worldBlockRange` 裁剪（粗层最外圈网格可能超出世界范围）；
+   同一帧内按 URL 去重、更粗的先画，半透明像素不会被反复叠亮。`stats.drawn` 包含兜底绘制次数。
+   **请求预算**：细层仍在请求中时只查 LRU 里的粗层，不主动请求（粗层是抗锯齿降采样、单张比细层更大，
+   首访预取会让传输量翻数倍；放大时上一层瓦片本来就在 LRU 里，兜底零请求）；只有永久缺失 / 瞬时失败的
+   细层才为补洞请求粗层。缩小方向没有更粗层的缓存，等新层级到达（与旧版一致）。
+7. **缓存**：已解码图片 `Map<key, HTMLImageElement>`，LRU 上限 `MAX_CACHED_TILES = 400`（约 100 MB）；
    缺失 key 单独放在 `Set`（上限 `MAX_MISSING_TILES = 4096`），避免反复请求。
-7. **位图上限**：`MAX_CANVAS_PIXELS = 24_000_000`，作用于「1.5×视口 × dpr」而不是整幅地图。
+8. **位图上限**：`MAX_CANVAS_PIXELS = 24_000_000`，作用于「1.5×视口 × dpr」而不是整幅地图。
    4K 屏幕 dpr=1 约 1250 万像素，远在上限内；只有超高分屏（如 4K × dpr 2）才会触发
    等比降采样兜底（`stats.backingFactor < 1`）。
 
@@ -482,8 +498,9 @@ manifest 字段（`parseManifest` 负责校验，结构不对 → 返回 null �
 
 ```js
 window.__mapApp.tiles()      // -> { level, blocksPerPixel, scale, canvasWidth/Height, requests,
-                             //      loaded, missing, cache, maxTiles, visibleTiles, drawn, ... }
-window.__mapApp.tileLayer    // TileLayer 实例（只读排障用）
+                             //      loaded, missing, retries, transient, cache, maxTiles,
+                             //      visibleTiles, drawn, ... }
+window.__mapApp.tileLayer    // TileLayer 实例（只读排障用；retryTransient() 可手动重试瞬时失败）
 window.__mapApp.tileset      // Tileset 实例（toJSON() 得到纯数据）
 document.body.dataset.base   // 'tiles' | 'image' | 'empty'
 ```

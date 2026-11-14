@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TileLayer, Tileset, parseManifest, formatGeneratedAt } from '../assets/js/tiles.js';
+import {
+  TileLayer, Tileset, parseManifest, formatGeneratedAt,
+  TILE_RETRY_DELAYS, TILE_TRANSIENT_TTL,
+} from '../assets/js/tiles.js';
 
 function installFakes(t) {
   const images = [];
@@ -273,3 +276,282 @@ test('formatGeneratedAt renders local date plus relative day', () => {
   assert.equal(formatGeneratedAt('not-a-date', now), '');
   assert.equal(formatGeneratedAt(12345, now), '');
 });
+
+/* -------------------------------------------------------------------------- *
+ * 瞬时错误重试（404 = 永久缺失，5xx / 断网 = 退避重试）
+ * -------------------------------------------------------------------------- */
+
+/** 伪造 Resource Timing：按 URL 返回一个带 responseStatus 的条目（没列出的 URL 无条目） */
+function installResourceStatus(t, statusByUrl) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'performance');
+  Object.defineProperty(globalThis, 'performance', {
+    configurable: true,
+    writable: true,
+    value: {
+      getEntriesByName(url) {
+        return url in statusByUrl ? [{ name: url, responseStatus: statusByUrl[url] }] : [];
+      },
+    },
+  });
+  t.after(() => (
+    descriptor ? Object.defineProperty(globalThis, 'performance', descriptor) : delete globalThis.performance
+  ));
+}
+
+/** 记录每次 drawImage 的全部参数（区分细层 5 参数与粗层兜底 9 参数） */
+function recordingCanvas() {
+  const calls = [];
+  let width = 0;
+  let height = 0;
+  const ctx = {
+    setTransform() {},
+    clearRect() {},
+    drawImage(...args) { calls.push(args); },
+  };
+  const canvas = {
+    style: {},
+    getContext: () => ctx,
+    get width() { return width; },
+    set width(value) { width = value; },
+    get height() { return height; },
+    set height(value) { height = value; },
+  };
+  return { canvas, ctx, calls };
+}
+
+function makeActiveLayer(canvas, set, viewState) {
+  const layer = new TileLayer(canvas, { tileset: set });
+  layer.setActive(true);
+  layer.update(viewState);
+  return layer;
+}
+
+test('404 是永久缺失：不重试、不进瞬时失败、之后也不再请求', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, { 'first/0/0_0.png': 404 });
+  const { canvas } = canvasFake();
+  const layer = makeActiveLayer(canvas, tileset(), { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  images[0].onerror();
+  assert.equal(layer._missing.has('0/0_0'), true, '404 进永久缺失');
+  assert.equal(layer.stats.missing, 1);
+  assert.equal(layer.stats.transient, 0);
+  assert.equal(layer.stats.retries, 0, '404 不排队重试');
+  assert.equal(layer._retryTimers.size, 0);
+
+  t.mock.timers.tick(TILE_TRANSIENT_TTL * 2);
+  layer.draw();
+  assert.equal(images.length, 1, '永久缺失不会再请求');
+});
+
+test('503 瞬时错误：2 秒后退避重试，成功即进缓存并清掉重试状态', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, { 'first/0/0_0.png': 503 });
+  const { canvas } = canvasFake();
+  const layer = makeActiveLayer(canvas, tileset(), { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  images[0].onerror();
+  assert.equal(layer._missing.size, 0, '瞬时错误不进永久缺失');
+  assert.equal(layer.stats.retries, 1);
+  assert.equal(layer._retryTimers.size, 1);
+
+  t.mock.timers.tick(TILE_RETRY_DELAYS[0] - 1);
+  assert.equal(images.length, 1, '退避未到时间不重发');
+  t.mock.timers.tick(1);
+  assert.equal(images.length, 2, '2 秒后退避重试');
+
+  images[1].onload();
+  assert.equal(layer._images.get('0/0_0'), images[1]);
+  assert.equal(layer.stats.transient, 0);
+  assert.equal(layer.stats.retries, 1, 'retries 是累计次数');
+  assert.equal(layer._retries.size, 0);
+  assert.equal(layer._retryTimers.size, 0);
+});
+
+test('读不到 HTTP 状态时按瞬时错误处理（宁可多试，不把 503 变永久空白）', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, {});
+  const { canvas } = canvasFake();
+  const layer = makeActiveLayer(canvas, tileset(), { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  images[0].onerror();
+  assert.equal(layer._missing.size, 0);
+  assert.equal(layer.stats.transient, 0);
+  assert.equal(layer._retryTimers.size, 1);
+});
+
+test('3 次退避仍失败 → 60 秒瞬时失败（不是永久缺失），到期自动重来', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, { 'first/0/0_0.png': 503 });
+  const { canvas } = canvasFake();
+  const layer = makeActiveLayer(canvas, tileset(), { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  // 首次 + 3 次重试：每次失败后按 2/5/10 秒排下一轮
+  for (let attempt = 0; attempt < TILE_RETRY_DELAYS.length; attempt += 1) {
+    images[attempt].onerror();
+    t.mock.timers.tick(TILE_RETRY_DELAYS[attempt]);
+  }
+  images[TILE_RETRY_DELAYS.length].onerror();
+  assert.equal(images.length, TILE_RETRY_DELAYS.length + 1);
+  assert.equal(layer.stats.retries, TILE_RETRY_DELAYS.length);
+  assert.equal(layer.stats.transient, 1, '重试耗尽后进入瞬时失败');
+  assert.equal(layer._missing.size, 0, '绝不能写成永久缺失');
+
+  // TTL 内：任何绘制都不再请求
+  t.mock.timers.tick(TILE_TRANSIENT_TTL - 1);
+  layer.draw();
+  assert.equal(images.length, TILE_RETRY_DELAYS.length + 1, 'TTL 内不请求');
+
+  // TTL 到期：静止画面也会自动放行一轮
+  t.mock.timers.tick(1);
+  layer.draw();
+  assert.equal(layer.stats.transient, 0);
+  assert.equal(images.length, TILE_RETRY_DELAYS.length + 2, 'TTL 到期后重新请求');
+});
+
+test('online / 回到前台会立刻清掉瞬时失败并重新请求', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, { 'first/0/0_0.png': 503, 'first/0/1_0.png': 503 });
+
+  const listeners = new Map();
+  const eventTarget = () => ({
+    addEventListener(type, handler) { listeners.set(type, handler); },
+    removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); },
+  });
+  const documentFake = { visibilityState: 'hidden', ...eventTarget() };
+  for (const [key, value] of [['window', eventTarget()], ['document', documentFake]]) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    t.after(() => (descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key]));
+  }
+
+  const { canvas } = canvasFake();
+  const layer = new TileLayer(canvas, { tileset: tileset() });
+  layer.setActive(true);
+  t.after(() => layer.destroy());
+
+  layer._markTransient('0/0_0');
+  assert.equal(layer.stats.transient, 1);
+  listeners.get('online')();
+  assert.equal(layer.stats.transient, 0, 'online 清空瞬时失败');
+  layer._loadTile(layer.tileset.levels[0], 0, 0);
+  assert.equal(images.length, 1, 'online 后允许重新请求');
+
+  layer._markTransient('0/1_0');
+  documentFake.visibilityState = 'visible';
+  listeners.get('visibilitychange')();
+  assert.equal(layer.stats.transient, 0, '回到前台清空瞬时失败');
+
+  layer.destroy();
+  assert.equal(listeners.has('online'), false, 'destroy 摘掉监听器');
+});
+
+/* -------------------------------------------------------------------------- *
+ * 粗层兜底 + 逐级细化
+ * -------------------------------------------------------------------------- */
+
+test('细层请求中不预取粗层（首屏字节不翻倍），细层到达后直接贴细层', (t) => {
+  const { images } = installFakes(t);
+  const { canvas, calls } = recordingCanvas();
+  const set = tileset('fb/', 512, [0, 1]);
+  const layer = makeActiveLayer(canvas, set, { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  assert.equal(layer.stats.level, 0);
+  assert.equal(layer.stats.requests, 1, '只请求细层，粗层留着到真正需要时再取');
+  const fineImg = images.find((img) => img.src === 'fb/0/0_0.png');
+  assert.ok(fineImg);
+  assert.equal(images.find((img) => img.src === 'fb/1/0_0.png'), undefined);
+
+  // 换窗口仍然是请求中的细层：依旧不抢救式地拉粗层
+  layer.update({ scale: 1, tx: 60, ty: 0, viewWidth: 128, viewHeight: 128 });
+  assert.equal(layer.stats.requests, 1);
+  assert.equal(calls.length, 0, '没有可用的粗层就不画，自由合成外扩窗口继续等细层');
+
+  fineImg.onload();
+  calls.length = 0;
+  layer.draw();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], fineImg);
+  assert.equal(calls[0].length, 5);
+  assert.equal(layer.stats.requests, 1, '全程不请求粗层');
+});
+
+test('粗层已在缓存（缩放留下的上一层）时先贴粗层兜底，细层到达后替换', (t) => {
+  const { images } = installFakes(t);
+  const { canvas, calls } = recordingCanvas();
+  const set = tileset('fb/', 512, [0, 1]);
+  const layer = new TileLayer(canvas, { tileset: set });
+  layer.setActive(true);
+  t.after(() => layer.destroy());
+
+  // 先把粗层放进缓存，模拟从远景放大：上一层瓦片还在 LRU 里
+  layer._loadTile(layer.tileset.levels[1], 0, 0);
+  const coarseImg = images.find((img) => img.src === 'fb/1/0_0.png');
+  coarseImg.onload();
+
+  layer.update({ scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  assert.equal(layer.stats.requests, 2, '兜底只读缓存，不额外请求');
+  const fineImg = images.find((img) => img.src === 'fb/0/0_0.png');
+
+  // 细层请求中：用 9 参数把 512px 粗瓦片按源矩形裁着贴上去
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], coarseImg);
+  assert.equal(calls[0].length, 9);
+  assert.equal(calls[0][5], 32, '粗瓦片左缘相对窗口原点（窗口每边外扩 32px）');
+  assert.equal(calls[0][7], 512, '粗瓦片目标尺寸 = 256 × 2^1');
+
+  // 细层到达：重画只贴细层（5 参数），粗层兜底不再出现
+  fineImg.onload();
+  calls.length = 0;
+  layer.draw();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], fineImg);
+  assert.equal(calls[0].length, 5);
+  assert.equal(calls[0][3], 256);
+  assert.equal(layer.stats.drawn, 1);
+});
+
+test('细层永久缺失时请求父级粗瓦片长期兜底（不留空白格）', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { images } = installFakes(t);
+  installResourceStatus(t, { 'fb/0/0_0.png': 404 });
+  const { canvas, calls } = recordingCanvas();
+  const set = tileset('fb/', 512, [0, 1]);
+  const layer = makeActiveLayer(canvas, set, { scale: 1, tx: 0, ty: 0, viewWidth: 128, viewHeight: 128 });
+  t.after(() => layer.destroy());
+
+  const fineImg = images.find((img) => img.src === 'fb/0/0_0.png');
+  assert.equal(layer.stats.requests, 1, '首屏只请求细层');
+  fineImg.onerror();
+  assert.equal(layer._missing.has('0/0_0'), true);
+
+  // 判定永久缺失后才值得为补洞去请求粗层
+  calls.length = 0;
+  layer.draw();
+  const coarseImg = images.find((img) => img.src === 'fb/1/0_0.png');
+  assert.ok(coarseImg, '缺失的细层触发粗层请求');
+  assert.equal(layer.stats.requests, 2);
+  coarseImg.onload();
+
+  calls.length = 0;
+  layer.draw();
+  assert.equal(layer.stats.drawn, 1);
+  assert.equal(calls[0][0], coarseImg, '缺失的细层由粗层顶上');
+  assert.equal(layer.stats.missing, 1);
+
+  calls.length = 0;
+  layer.update({ scale: 1, tx: 60, ty: 0, viewWidth: 128, viewHeight: 128 });
+  assert.equal(calls[0][0], coarseImg, '换窗口重画时继续兜底，且不再请求');
+  assert.equal(layer.stats.requests, 2);
+});
+
