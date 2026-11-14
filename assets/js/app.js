@@ -1032,12 +1032,16 @@ function fitToSpawn(opts = {}) {
 }
 
 /**
- * 进入页面 / 点「原点」时的默认视野：以世界原点 (0,0) 为中心，横向约显示 DEFAULT_SPAN_BLOCKS 个方块。
+ * 进入页面 / 点「原点」时的默认视野：以世界原点 (0,0) 为中心，视野**长边**约显示 DEFAULT_SPAN_BLOCKS 个方块。
  *
  * 为什么不直接整图适配：整图适配是「最小缩放」，1 像素只占 0.1~0.2 个屏幕像素，
  * 进来只看到一整片模糊的地图缩略图，既看不清地形也找不到自己在哪。
  * 换成「约 1024 方块视野」后大约 1 屏幕像素 = 1 方块（Minecraft 地图的原生比例），
  * 出生点周边地形和附近的路径点都能一眼看到。
+ *
+ * 为什么按长边而不是固定按宽度：手机竖屏时宽度只有 ~390px，若仍让宽度覆盖 1024 方块，
+ * 纵向会被拉到 3000+ 方块，瓦片层级被迫选粗（L1）且首屏要多下 20 多张瓦片（实测 3.8MB）。
+ * 按长边（竖屏即高度）取 1024 方块后，视野约 470×1024 方块、层级回到 L0，首屏降到 ~1.2MB 且更清晰。
  */
 const DEFAULT_SPAN_BLOCKS = 1024;
 const MIN_SPAN_BLOCKS = 64;
@@ -1057,14 +1061,16 @@ function focusOrigin(opts = {}) {
   const pt = state.projection.worldToImage(0, 0);
   if (!pt || !Number.isFinite(pt.px)) return false;
 
-  // 每像素多少方块 → 想让视口宽度覆盖 span 个方块，需要的缩放比
+  // 每像素多少方块 → 想让视野**长边**覆盖 span 个方块，需要的缩放比
   const blocksPerPixelX = (state.calibration ? state.calibration.xMax - state.calibration.xMin : state.imageSize.width) / state.imageSize.width;
   const viewState = safeViewState();
   const viewWidth = Number(viewState?.viewWidth) || 0;
+  const viewHeight = Number(viewState?.viewHeight) || 0;
+  const spanPixels = Math.max(viewWidth, viewHeight);
   const span = defaultSpanBlocks();
   let scale = null;
-  if (viewWidth > 0 && blocksPerPixelX > 0) {
-    scale = (viewWidth * blocksPerPixelX) / span;
+  if (spanPixels > 0 && blocksPerPixelX > 0) {
+    scale = (spanPixels * blocksPerPixelX) / span;
   }
   tryCall(view, 'centerOnImagePoint', pt.px, pt.py, { scale, animate: opts.animate !== false });
   drawGrid(safeViewState());
